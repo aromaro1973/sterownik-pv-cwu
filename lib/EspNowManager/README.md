@@ -1,111 +1,90 @@
+
+
 # ESPNowManager
+Zadanie modułu
+Moduł ESPNowManager odpowiada za bezprzewodową, asynchroniczną rejestrację i parsowanie danych telemetrycznych wysyłanych z drugiego mikrokontrolera (nadajnika) zainstalowanego bezpośrednio przy falowniku PV.
 
-## Zadanie modułu
+Działa w warstwie biznesowej (CORE 1), dostarczając całemu sterownikowi aktualnych informacji o stanie bilansu energetycznego domu oraz parametrach akumulatora 24V. Moduł realizuje zaawansowaną diagnostykę poprawności transmisji radiowej i automatycznie wykrywa awarię linku komunikacyjnego (Timeout).
 
-Moduł `ESPNowManager` odpowiada za bezprzewodową komunikację pomiędzy sterownikiem grzałki (Odbiornik) a drugim modułem ESP32 pracującym bezpośrednio przy falowniku Anenji (Nadajnik).
+Funkcje
+Obsługa bezprzewodowego protokołu ESP-NOW (bezpośrednia, bezwątkowa komunikacja bez narzutu na zestawianie połączenia Wi-Fi).
 
-Jego zadaniem jest błyskawiczne odbieranie zunifikowanych danych pomiarowych oraz udostępnianie ich pozostałym układom sterownika.
+Wrapper (mostek C/C++) umożliwiający bezpieczne przekierowanie sprzętowego callbacku przerwania esp_now_recv_cb do wnętrza instancji klasy.
 
-ESPNowManager nie podejmuje żadnych decyzji dotyczących regulacji mocy ani bezpieczeństwa pracy. Jest wyłącznie warstwą komunikacyjną.
+Wyliczanie wskaźników jakości połączenia (QoS): wykrywanie zgubionych ramek na podstawie inkrementacji packetId oraz pomiar rzeczywistego interwału nadawania [ms].
 
----
+Mechanizm „Watchdoga” połączenia: automatyczny reset danych i przejście w stan awarii po 7 sekundach braku transmisji.
 
-## Funkcje
+Bezpieczne udostępnianie sparsowanych pól struktury danych za pomocą publicznego interfejsu API.
 
-- Inicjalizacja natywnego protokołu ESP-NOW na ESP32.
-- Odbiór danych z drugiego ESP32 w postaci jednej, zwięzłej struktury (czas odczytu rejestrów falownika wynosi ~42 ms).
-- Kontrola stanu połączenia za pomocą programowego Watchdoga (brak ramki przez 7 sekund = rozłączenie).
-- Udostępnianie aktualnych danych procesowych pozostałym modułom.
+Architektura Ramki Danych (InverterPacket)
+W celu minimalizacji czasu zajętości pasma radiowego oraz uproszczenia parsowania, dane przesyłane są w postaci surowego, upakowanego rekordu pamięci o stałej długości:
 
----
+C++
+struct __attribute__((packed)) InverterPacket {
+    uint32_t packetId;       // Monotoniczny licznik pakietów (detekcja dziur w transmisji)
+    uint16_t pvPower;        // Bieżąca generacja z paneli fotowoltaicznych [W]
+    uint16_t inverterPower;  // Obciążenie wyjściowe falownika / domu [W]
+    int16_t  batteryPower;   // Bilans mocy akumulatora [W] (wartość ujemna = ładowanie, dodatnia = rozładowanie)
+    uint8_t  soc;            // Poziom naładowania magazynu energii [%]
+    float    batteryVoltage; // Napięcie na zaciskach baterii [V]
+    float    batteryCurrent; // Prąd płynący z/do akumulatora [A]
+};
+Logika działania (Diagnostyka i Bezpieczeństwo)
+1. Detekcja Zgubionych Pakietów
+Przy odebraniu pierwszej prawidłowej ramki moduł synchronizuje się z jej packetId i wylicza wartość oczekiwaną dla następnej próbki: m_expectedPacketId = packet.packetId + 1.
 
-## Wejścia
+Jeśli w kolejnej iteracji nadajnik prześle ramkę o wyższym identyfikatorze, różnica ta jest natychmiast dopisywana do licznika strat (m_lostPackets). Pozwala to na precyzyjną ocenę zakłóceń elektromagnetycznych w miejscu montażu.
 
-Moduł odbiera dane z drugiego ESP32 poprzez ESP-NOW za pomocą spakowanej struktury binarnej `InverterPacket`.
+2. Strażnik Łącza (Link Watchdog)
+W pętli update() na CORE 1 moduł stale monitoruje czas, jaki upłynął od odebrania ostatniego poprawnego pakietu (millis() - m_lastPacketTime). Jeśli czas ten przekroczy próg bezpieczeństwa 7000 ms:
 
-Przesyłane informacje obejmują:
-- Moc paneli PV (`pvPower`),
-- Moc wyjściową falownika AC (`inverterPower`),
-- [cite_start]Skonsolidowaną moc baterii (`batteryPower`) – **Ważne:** wartość dodatnia ($+$) oznacza rozładowywanie akumulatora, wartość ujemna ($-$) oznacza ładowanie.
-- [cite_start]Stan naładowania SOC[cite: 9],
-- [cite_start]Napięcie oraz prąd akumulatora[cite: 5].
+Flaga połączenia m_connected zmienia stan na false.
 
----
+Wartości mocy są zerowane w celu ochrony przed podjęciem decyzji wykonawczych na podstawie przestarzałych danych (tzw. "stale data").
 
-## Wyjścia (Aktualne API)
+Układ przechodzi w tryb poszukiwania synchronizacji ramy (m_firstPacketReceived = false).
 
-Moduł udostępnia publicznie następujące metody:
+Wejścia i Wyjścia
+Wejścia (Warstwa Radiowa)
+Surowy strumień bajtów odbierany asynchronicznie przez stos radiowy ESP32 o długości równej sizeof(InverterPacket).
 
-```cpp
-bool isConnected() const;
-uint32_t getPacketCounter() const;
-uint32_t getLastPacketTime() const;
-
-uint16_t getPVPower() const;
-uint16_t getInverterPower() const;
-int16_t  getBatteryPower() const; // Znak +/- : (+) rozładowanie, (-) ładowanie
-uint16_t getHousePower() const;
-
-uint8_t  getSOC() const;
-float    getBatteryVoltage() const;
-float    getBatteryCurrent() const;
+Wyjścia (API publiczne dla automatyki EMS)
+C++
+void begin();                       // Inicjalizacja stosu ESP-NOW i rejestracja callbacku
+void update();                      // Kontrola timeoutu (wywoływane w loop na CORE 1)
+bool isConnected() const;           // Zwraca status połączenia (true = link aktywny)
+uint32_t getPacketCounter() const;  // Całkowita liczba odebranych ramek
+uint32_t getLostPackets() const;    // Całkowita liczba zgubionych ramek
+uint32_t getLastPeriodMs() const;   // Czas w [ms] pomiędzy dwoma ostatnimi ramkami
+uint16_t getInverterPower() const;  // Aktualna moc falownika [W]
+int16_t  getBatteryPower() const;   // Aktualny bilans baterii [W] (+/-)
+uint8_t  getSOC() const;            // Stan naładowania akumulatora [%]
 Współpraca z modułami
-ESP przy falowniku (Nadajnik RS232)
-         │
-         ▼  [ ESP-NOW Transmisja Radiowa ]
-   ESPNowManager (Odbiornik grzałki)
-         │
-         ├────► Guardian (Kontrola limitów)
-         ├────► AutoController (Wyliczanie algorytmu Off-Grid)
-         ├────► DisplayManager (Wizualizacja na LCD)
-         ├────► Logger (Zrzut diagnostyczny)
-         └────► HomeAssistant (W przyszłości)
-Moduł nie odpowiada za
-Sterowanie fizyczne grzałką i triakiem,
+  [ Nadajnik przy Falowniku ] ───► (Fale radiowe 2.4GHz / ESP-NOW)
+                                         │
+                                         ▼
+                               ┌──────────────────┐
+                               │  ESPNowManager   │ (CORE 1 - Odbiór i analiza QoS)
+                               └────────┬─────────┘
+                                        │
+         ┌──────────────────────────────┼──────────────────────────────┐
+         ▼                              ▼                              ▼
+  [ AutoController ]               [ Guardian ]               [ DisplayManager ]
+ (Wyliczanie nadwyżki EMS)    (Ochrona przed overload)    (Ekran diagnostyczny ESP_DIAG)
+Moduł NIE odpowiada za:
+Konfigurację sprzętową samej karty sieciowej Wi-Fi i wybór kanału radiowego (wymaga zewnętrznej inicjalizacji np. w main.cpp).
 
-Wyliczanie algorytmu regulacji mocy (od tego jest AutoController),
+Interpretację logiczną odebranych watów i sterowanie grzałką.
 
-Blokady bezpieczeństwa (od tego jest Guardian),
+Scenariusze Testowe (QA)
+Test Rozmiaru Ramki: Wysłanie uszkodzonego pakietu o długości o 1 bajt mniejszej niż struktura InverterPacket. Oczekiwany rezultat: Metoda handleRx() zignoruje pakiet, dane systemowe nie zostaną nadpisane śmieciowymi wartościami.
 
-Zarządzanie połączeniem z domowym routerem (od tego jest WiFiManager).
+Test Odzyskiwania Połączenia (Hot Swap): Wyłączenie zasilania nadajnika na 10 sekund (aktywacja timeoutu, isConnected() == false), a następnie ponowne włączenie. Oczekiwany rezultat: System automatycznie synchronizuje się z nowym ID pakietu, flaga isConnected() wraca na true, a liczniki kontynuują pracę.
 
-Założenia projektowe
-ESPNowManager jest jedynym modułem odpowiedzialnym za odbiór danych z drugiego ESP32. Pozostałe moduły nie komunikują się bezpośrednio przez radio. Każdy komponent systemu korzysta wyłącznie z danych udostępnionych przez czyste API tej klasy. Dzięki temu cała warstwa komunikacji bezprzewodowej znajduje się w jednym miejscu projektu.
+Status i Wersja
+Status: 🟢 Moduł gotowy / Integracja z callbackiem zgodna z ESP-IDF
 
-Aktualna logika pracy
-Inicjalizacja stosu ESP-NOW (współdzieli kanał radiowy z WiFiManager).
+Wersja: 0.3
 
-Rejestracja systemowej funkcji callback dla zdarzenia odebrania danych (onDataRecv).
-
-Odbiór kolejnych ramek danych i bezpieczne przepisywanie ich z bufora do zmiennych wewnętrznych klasy.
-
-Cykliczny nasłuch w update() – jeśli czas od odebrania ostatniej ramki przekroczy 7000 ms, następuje automatyczne ustawienie flagi connected = false oraz bezpieczne zerowanie bilansu baterii w celu ochrony systemu przed pracą na "zamrożonych" danych.
-
-Filozofia działania
-ESPNowManager jest czystym "dostawcą prawdy" dla reszty programu. Moduł nie interpretuje odebranych wartości, nie analizuje ich pod kątem poprawności fizycznej i nie podejmuje żadnych decyzji wykonawczych. Wyłącznie odbiera strukturę bajtów i wystawia ją przez gettery.
-
-Testy
-Wykonane i planowane testy:
-
-Poprawność inicjalizacji interfejsu radiowego,
-
-Zgodność rozmiaru struktury binarnej InverterPacket po obu stronach,
-
-Reakcja programu na nagłe odłączenie zasilania nadajnika (test Watchdoga 7s),
-
-Integracja z trybem WorkMode::AUTO w maszynie stanów sterownika grzałki.
-
-Status
-🟢 Moduł wdrożony i zintegrowany z AutoController
-
-Wersja modułu
-0.2
-
-Autor
-Arkadiusz Marek
-Projekt rozwijany przy współpracy z ChatGPT / Gemini.
-
-
----
-
-Plik dokumentacji odzwierciedla teraz rzeczywisty stan kodu w 100%. Wszystkie trzy pliki w
+Autor: Arkadiusz Marek

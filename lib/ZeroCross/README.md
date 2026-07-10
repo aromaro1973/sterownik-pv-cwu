@@ -1,133 +1,22 @@
 # ZeroCross
-
-## Zadanie modułu
-
-Moduł `ZeroCross` odpowiada za wykrywanie przejścia napięcia sieciowego przez zero.
-
-Na podstawie sygnału z optoizolatora H11AA1 moduł wykrywa każdy półokres sieci, mierzy częstotliwość oraz informuje pozostałe moduły o pojawieniu się nowego półokresu.
-
----
-
-## Funkcje
-
-- detekcja przejścia przez zero
-- obsługa przerwania ESP32
-- filtracja zakłóceń
-- zliczanie półokresów
-- pomiar częstotliwości sieci
-- wykrywanie zaniku sygnału sieci
-- informowanie o nowym półokresie
-
----
-
-## Wejścia
-
-Sygnał z układu H11AA1 podłączonego do wejścia ESP32.
-
----
-
-## Wyjścia
-
-Moduł udostępnia:
-
-```cpp
-available()
-
-getHalfCycles()
-
-getTotalCounter()
-
-getFrequency()
-
-isSignalPresent()
-```
-
----
-
-## Współpraca z modułami
-
-```
-H11AA1
-   │
-   ▼
-ZeroCross
-   │
-   ├────────► BurstFire
-   │
-   ├────────► DisplayManager
-   │
-   ├────────► Logger
-   │
-   └────────► Guardian
-```
-
----
-
-## Aktualna logika pracy
-
-1. Wykrycie przejścia przez zero.
-2. Wywołanie przerwania ESP32.
-3. Odfiltrowanie zakłóceń (5 ms).
-4. Zwiększenie licznika półokresów.
-5. Ustawienie informacji o nowym półokresie.
-6. Aktualizacja częstotliwości raz na sekundę.
-7. Wykrywanie zaniku sygnału sieci.
-
----
-
-## Moduł nie odpowiada za
-
-- sterowanie triakiem,
-- regulację mocy,
-- algorytm BurstFire,
-- wyświetlanie danych,
-- komunikację WiFi,
-- automatykę sterownika.
-
----
-
-## Parametry
-
-- częstotliwość sieci: 50 Hz
-- liczba półokresów: 100/s
-- filtr zakłóceń: 5 ms
-- wykrywanie zaniku sygnału: 50 ms
-
----
-
-## Testy
-
-Moduł został sprawdzony podczas testów:
-
-- poprawna detekcja przejścia przez zero,
-- poprawna współpraca z H11AA1,
-- poprawna filtracja zakłóceń,
-- stabilny pomiar:
-  - HalfCycles = 100,
-  - Frequency = 50.0 Hz,
-- poprawna współpraca z BurstFire,
-- poprawna współpraca z HeaterOutput,
-- poprawna współpraca z DisplayManager,
-- poprawna współpraca z Logger,
-- test z żarówką 100 W,
-- test z grzałką 1800 W.
-
----
-
-## Status
-
-✅ Ukończony
-
----
-
-## Autor
-
-Arkadiusz Marek
-
-Projekt rozwijany przy współpracy z ChatGPT.
-
----
-
-## Wersja modułu
-
-**2.0**
+Zadanie modułuModuł ZeroCross odpowiada za sprzętowo-programową detekcję momentu przejścia napięcia sieciowego 230V/50Hz przez zero.Dostarcza on krytyczny czasowo sygnał synchronizacyjny dla warstwy wykonawczej (CORE 0), umożliwiając modułowi PhaseController precyzyjne odliczanie czasu do załączenia triaka na zboczu opadającym sinusoidy. Równolegle, w warstwie biznesowej (CORE 1), moduł realizuje funkcje diagnostyczne, takie jak pomiar częstotliwości sieci oraz detekcja zaniku sygnału (AC Loss).FunkcjeBłyskawiczne przechwytywanie sprzętowych impulsów przejścia przez zero (wykorzystanie przerwań zewnętrznych GPIO oraz pamięci IRAM_ATTR).Cyfrowa filtracja drgań styków i szumów sieciowych (hardware-software debounce) na poziomie $5\,\text{ms}$.Pomiar rzeczywistej częstotliwości sieci AC z rozdzielczością do $0.1\,\text{Hz}$.Diagnostyka obecności zasilania sieciowego (automatyczne wykrywanie zaniku fazy powyżej $50\,\text{ms}$).Bezpieczna, asynchroniczna wymiana danych pomiędzy przerwaniem sprzętowym a pętlą główną poprzez sekcje krytyczne (noInterrupts()).Logika działania (Synchronizacja i Diagnostyka)Układ detektora (np. oparty na transoptorze H11AA1) generuje zbocze opadające (FALLING) przy każdym przejściu sinusoidy przez zero (czyli co $10\,\text{ms}$ dla sieci 50Hz).Moduł przetwarza ten proces w dwóch warstwach:Warstwa Krytyczna Czasowo (Przerwanie ISR):Wyzwalana sprzętowo przy każdym przejściu przez zero.Sprawdza, czy od poprzedniego impulsu minęło co najmniej $5000\,\mu\text{s}$ ($5\,\text{ms}$). Jeśli nie, impuls jest odrzucany jako zakłócenie.Zapisuje dokładny znacznik czasu micros() i podbija licznik półokresów.Warstwa Diagnostyczna (update() na CORE 1):Detekcja awarii: Jeśli od ostatniego zapisanego impulsu minęło więcej niż $50\,\text{ms}$ ($50000\,\mu\text{s}$), flaga signalPresent zostaje ustawiona na false. Informacja ta pozwala modułowi Guardian lub pętli głównej na natychmiastowe wyłączenie sterowania triakiem.Kalkulacja częstotliwości: Raz na sekundę ($1000\,\text{ms}$) moduł oblicza różnicę w liczniku półokresów. Częstotliwość sieci wyliczana jest ze wzoru:$$\text{frequency} = \frac{\text{halfCycles}}{2.0}$$Wejścia i WyjściaWejścia (Sprzętowe i logiczne)Fizyczny pin wejściowy ESP32 (PIN_ZERO_CROSS) podciągnięty do zasilania (INPUT_PULLUP), nasłuchujący impulsu z transoptora.Sprzętowy licznik czasu micros() oraz millis().Wyjścia (API publiczne)C++void begin();                  // Konfiguracja pinu GPIO i rejestracja przerwania ISR
+void update();                 // Analiza stanu sygnału i kalkulacja Hz (wywoływane w loop na CORE 1)
+bool available();              // Zwraca true, jeśli pojawił się nowy półokres (kasuje flagę)
+uint32_t getHalfCycles() const;// Zwraca liczbę półokresów z ostatniej sekundy
+uint32_t getTotalCounter() const; // Zwraca całkowitą liczbę zarejestrowanych impulsów od startu
+float getFrequency() const;    // Zwraca aktualną częstotliwość sieci (np. 50.0 Hz)
+bool isSignalPresent() const;  // Zwraca status obecności napięcia AC (false = brak zasilania)
+Współpraca z modułami    [ Sieć AC 230V ] ───► [ Detektor Hardware H11AA1 ]
+                                   │
+                                   ▼ (Impuls FALLING na PIN_ZERO_CROSS)
+                        ┌────────────────────┐
+                        │     ZeroCross      │
+                        └──────────┬─────────┘
+                                   │
+         ┌─────────────────────────┴─────────────────────────┐
+         ▼ (Sygnalizacja nowej próbki)                       ▼ (Diagnostyka stanu sieci)
+ [ PhaseController (CORE 0) ]                         [ Guardian / AutoController (CORE 1) ]
+         │                                                   │
+         ▼ (Synchronizacja timera)                           ▼ (Zgłoszenie awarii w przypadku AC Loss)
+ [ Wyzwolenie bramki triaka ]                         [ Blokada systemu / Odcięcie grzałki ]
+Moduł NIE odpowiada za:Odmierzanie czasu opóźnienia i generowanie impulsu zapłonowego dla triaka (zadanie PhaseController).Decyzje o wyłączeniu grzałki z powodu przeciążenia sieci domowej (zadanie Guardian).Scenariusze Testowe (QA)Test Filtracji Szumów (Debounce): Generowanie sztucznych szpilek prądowych w odstępie $2\,\text{ms}$ od prawidłowego przejścia przez zero. Oczekiwany rezultat: Przerwanie ISR zignoruje te paczki danych, a licznik pulseCounter zwiększy się dokładnie o 1.Test Zaniku Fazy (AC Loss): Odłączenie sygnału wejściowego na czas dłuższy niż $50\,\text{ms}$. Oczekiwany rezultat: Metoda isSignalPresent() natychmiast zwraca false, umożliwiając bezpieczne rozłączenie układu wykonawczego.Test Dokładności Pomiaru: Podanie stabilnego sygnału wzorcowego $50\,\text{Hz}$ ($100$ impulsów na sekundę). Oczekiwany rezultat: Funkcja getFrequency() zwraca wartość 50.0f, a getHalfCycles() wynosi dokładnie 100.Status i WersjaStatus: 🟢 Klasa w pełni zaimplementowana i przetestowanaWersja: 0.2Autor: Arkadiusz Marek

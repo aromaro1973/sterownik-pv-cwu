@@ -1,90 +1,13 @@
 # Config
-
-## Zadanie modułu
-
-Moduł `Config` zawiera wszystkie stałe konfiguracyjne wykorzystywane przez projekt.
-
-Dzięki temu wszystkie parametry sprzętowe i programowe znajdują się w jednym miejscu, co ułatwia rozwój oraz późniejszą konfigurację sterownika.
-
----
-
-## Funkcje
-
-- definicja pinów ESP32
-- wersja programu
-- nazwa urządzenia
-- parametry sieci AC
-- konfiguracja BurstFire
-- zakres regulacji mocy
-- konfiguracja portu szeregowego
-- konfiguracja WiFi
-- ustawienia debugowania
-
----
-
-## Zawiera
-
-- konfigurację pinów ESP32
-- parametry sieci 50 Hz
-- parametry BurstFire
-- konfigurację WiFi
-- wersję sprzętu
-- wersję oprogramowania
-
----
-
-## Nie odpowiada za
-
-- obsługę sprzętu
-- sterowanie grzałką
-- algorytm BurstFire
-- wyświetlacz LCD
-- komunikację WiFi
-- automatykę sterownika
-
----
-
-## Współpraca z modułami
-
-Moduł wykorzystywany jest przez wszystkie pozostałe moduły projektu.
-
-```
-                Config
-                   │
-       ┌───────────┼───────────┐
-       │           │           │
-    Logger     ZeroCross   BurstFire
-       │           │           │
-       └───────────┼───────────┘
-                   │
-           pozostałe moduły
-```
-
----
-
-## Testy
-
-- sprawdzono poprawność definicji pinów
-- sprawdzono konfigurację BurstFire
-- sprawdzono konfigurację WiFi
-- sprawdzono konfigurację wszystkich modułów
-
----
-
-## Status
-
-✅ Ukończony
-
----
-
-## Autor
-
-Arkadiusz Marek
-
-Projekt rozwijany przy współpracy z ChatGPT.
-
----
-
-## Wersja modułu
-
-**1.0**
+Zadanie modułuModuł Config jest globalnym, centralnym rejestrem nastaw, mapowania pinów sprzętowych oraz limitów bezpieczeństwa sterownika.Wszystkie parametry zostały zdefiniowane przy użyciu nowoczesnych konstrukcji językowych constexpr, co gwarantuje optymalizację pamięciową na etapie kompilacji (brak narzutu na pamięć RAM ESP32). Moduł ten stanowi jedyne, autorytatywne źródło prawdy konfiguracyjnej dla kodu działającego zarówno na CORE 0 (PhaseController), jak i na CORE 1 (Guardian, AutoController).Główne sekcje konfiguracyjne1. Definicje Hardware (Mapowanie GPIO)Przypisuje fizyczne piny procesora ESP32 do kluczowych peryferiów wykonawczych:PIN_ZERO_CROSS (27) — dedykowane wejście z transoptora H11AA1, obsługujące przerwania zewnętrzne.PIN_TRIAC (14) — szybkie wyjście sterujące optotriakiem bez detekcji zera (Random-Phase, np. MOC3023).PIN_BUTTON_... — piny dedykowane dla lokalnej klawiatury sterującej (ControlPanel).2. Parametry Taktowania Sieci ACStałe matematyczne determinujące zachowanie timerów sprzętowych w module PhaseController:HALF_CYCLE_DURATION_US = 10000 — bazowy czas trwania jednej połówki sinusoidy dla częstotliwości 50 Hz ($10\,\text{ms}$). Stanowi punkt odniesienia do wyliczania opóźnienia zapłonu triaka.3. Nastawy Bezpieczeństwa (EMS / Guardian)Kluczowe progi prądowo-mocowe chroniące infrastrukturę off-grid:MAX_INVERTER_POWER_W (3500W) — limit mocy całkowitej falownika, powyżej którego Guardian odcina grzałkę.MAX_BATTERY_DRAW_W (400W) — maksymalna moc, jaką sterownik pozwala pobrać z magazynu energii 24V w celu podtrzymania stabilności grzania podczas chwilowych zachmurzeń.4. Architektura Hybrydowego Wyzwalania TriakaParametry definiujące pasma pracy i blokady algorytmu fazowego:PHASE_CONTROL_MAX_LIMIT (40%) — próg graniczny, powyżej którego sterownik zabrania pracy fazowej (odcinania w szczycie sinusoidy). Powyżej tej wartości (i poniżej 95%) następuje sztywne cięcie programowe, chroniące filtry wejściowe falownika przed udarami.Architektura Typów: Tryby Pracy SterownikaModuł definiuje silnie typowany enum klasy WorkMode, który zarządza główną maszyną stanów urządzenia:C++enum class WorkMode {
+    OFF,    // Całkowita blokada triaka, brak generowania impulsów
+    AUTO,   // Algorytm śledzenia nadwyżek (AutoController) pod nadzorem Guardiana
+    MANUAL  // Ręczne wymuszenie mocy z poziomu ControlPanel (pod nadzorem Guardiana)
+};
+Specyfikacja Powiązań MiędzymodułowychModuł Config.h nie posiada pliku źródłowego .cpp i jest bezpośrednio dołączany (#include) przez kluczowe komponenty systemu:                          [ Config.h ]
+                               │
+       ┌───────────────────────┼───────────────────────┐
+       ▼                       ▼                       ▼
+[ ZeroCross ]          [ PhaseController ]       [ Guardian ]
+(Piny & Debounce)      (Kąty fazowe i piny)     (Limity mocy W)
+Znaczenie parametrów w scenariuszach QAZmiana typu grzałki / instalacji: W przypadku migracji na mocniejszy falownik, modyfikacja parametru MAX_INVERTER_POWER_W automatycznie aktualizuje logikę obronną modułu Guardian bez potrzeby ingerencji w kod źródłowy algorytmu.Kalibracja czasu wyzwalania: Zmiana HALF_CYCLE_DURATION_US pozwala na łatwe dostosowanie sterownika do pracy w sieciach o innej charakterystyce (np. 60 Hz / $8333\,\mu\text{s}$) na poziomie samej deklaracji stałych.Status i WersjaStatus: 🟢 Zweryfikowany architektonicznie pod kątem sterowania fazowego (V0.3)Wersja: 0.3Autor: Arkadiusz Marek

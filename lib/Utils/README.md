@@ -1,93 +1,14 @@
 # Utils
-
-## Zadanie modułu
-
-Moduł `Utils` zawiera zbiór uniwersalnych funkcji pomocniczych wykorzystywanych przez różne moduły projektu.
-
-Dzięki wydzieleniu tych funkcji do osobnej klasy unikamy powielania kodu oraz zwiększamy czytelność całego projektu.
-
----
-
-## Funkcje
-
-- ograniczenie wartości do zadanego zakresu (`clamp`)
-- odmierzanie czasu (`elapsed`)
-- konwersja wartości logicznej na tekst (`boolToString`)
-- konwersja stanu na tekst ON/OFF (`onOff`)
-- przeliczanie procentów na moc (`percentToPower`)
-
----
-
-## Dostępne funkcje
-
-```cpp
-clamp()
-elapsed()
-boolToString()
-onOff()
-percentToPower()
-```
-
----
-
-## Współpraca z modułami
-
-Moduł może być wykorzystywany przez wszystkie moduły projektu.
-
-```
-             Utils
-                ▲
-                │
- ┌──────────────┼──────────────┐
- │              │              │
-Logger     ZeroCross     BurstFire
- │              │              │
- └──────────────┼──────────────┘
-                │
-        pozostałe moduły
-```
-
----
-
-## Moduł nie odpowiada za
-
-- sterowanie grzałką,
-- sterowanie triakiem,
-- obsługę LCD,
-- komunikację WiFi,
-- automatykę sterownika,
-- logowanie komunikatów.
-
----
-
-## Testy
-
-Sprawdzono poprawne działanie:
-
-- funkcji `clamp()`,
-- funkcji `elapsed()`,
-- funkcji `boolToString()`,
-- funkcji `onOff()`,
-- funkcji `percentToPower()`.
-
-Moduł wykorzystywany jest podczas testów wszystkich pozostałych modułów projektu.
-
----
-
-## Status
-
-✅ Ukończony
-
----
-
-## Autor
-
-Arkadiusz Marek
-
-Projekt rozwijany przy współpracy z ChatGPT.
-
----
-
-## Wersja modułu
-
-**1.0**
+Zadanie modułuModuł Utils to zestaw statycznych, bezstanowych funkcji pomocniczych (toolbox), używanych w całym projekcie w celu optymalizacji kodu, ujednolicenia operacji matematycznych oraz obsługi liczników czasu.Funkcje modułu są w pełni uniwersalne i bezpieczne wątkowo — mogą być współdzielone asynchronicznie przez CORE 0 oraz CORE 1. Ze względu na rygorystyczne podejście do wydajności i zarządzania pamięcią sterownika, moduł całkowicie eliminuje dynamiczną alokację pamięci na stercie (heap), operując wyłącznie na typach prostych oraz bezpośrednich wskaźnikach do pamięci Flash (const char*).FunkcjeMatematyczne ograniczanie zmiennych zmiennoprzecinkowych do zadanego przedziału bezpiecznego (clamp).Nieblokujące odmierzanie czasu za pomocą asynchronicznych znaczników millis(), w pełni odporne na sprzętowe przepełnienie licznika (tzw. millis overflow po ok. 49 dniach).Bezkosztowa konwersja stanów logicznych bool na reprezentację tekstową dla interfejsów diagnostycznych i ekranu LCD bez użycia zasobochłonnej klasy String.Skalowanie liniowe parametrów mocy dla celów automatyki EMS i logowania.Szczegółowa Logika i Algorytmy Optymalizacyjne1. Nieblokujący Timer Odporny na Overflow (elapsed)Tradycyjne porównanie czasu w postaci if (millis() > previousMillis + interval) ulega awarii, gdy licznik procesora przekroczy wartość $2^{32}-1$ i zresetuje się do zera. Moduł Utils implementuje bezpieczną arytmetykę uzupełnienia do dwójki:C++if (now - previousMillis >= interval)
+Dzięki temu, nawet jeśli różnica operuje na przekroczonym zakresie, wynik odejmowania beznakowych liczb 32-bitowych (uint32_t) zawsze zwraca prawidłowy, fizyczny czas, jaki upłynął od ostatniego zdarzenia. Przekazanie parametru przez referencję (uint32_t &previousMillis) pozwala na automatyczną aktualizację znacznika wewnątrz funkcji, upraszczając strukturę kodu w pętli loop().2. Eliminacja Fragmentacji RAM (boolToString / onOff)Zwracanie stanów tekstowych za pomocą obiektów typu String (np. "ON") zmusza mikrokontroler do dynamicznej alokacji bajtów w pamięci RAM, ich kopiowania i późniejszego zwalniania. Przy częstym logowaniu prowadzi to do fragmentacji pamięci i nagłych restartów ESP32.Moduł Utils zwraca bezpośredni wskaźnik do sekcji danych w pamięci Flash (const char*), co oznacza zerowy narzut na pamięć RAM i zerowe użycie cykli procesora na zarządzanie pamięcią.Wejścia i Wyjścia (API Statyczne)Wszystkie metody są metodami statycznymi klasy, co oznacza, że do ich wywołania nie jest wymagana instalacja obiektu (brak instancji):C++static float clamp(float value, float minValue, float maxValue);
+static bool elapsed(uint32_t &previousMillis, uint32_t interval);
+static const char* boolToString(bool value);
+static const char* onOff(bool value);
+static float percentToPower(float percent, float maxPower);
+Współpraca z modułamiJako moduł niskopoziomowy (Utility Layer), Utils znajduje się na samym dole hierarchii architektury programu i jest wstrzykiwany do wszystkich warstw systemu:                            [ Utils ]
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+ [ Logger ]             [ DisplayManager ]       [ AutoController ]
+(Formatowanie bool)    (Statusy ON/OFF na LCD)   (Timery i clampowanie)
+Moduł NIE odpowiada za:Przechowywanie zmiennych czasowych (użytkownik musi sam zadeklarować i przekazać zmienną przechowującą czas bazowy).Logowanie błędów ani wyświetlanie komunikatów (dostarcza jedynie surowe przetworzone dane).Scenariusze Testowe (QA)Test Przepełnienia Timera: Wymuszenie wartości previousMillis = 0xFFFFFFF0 ($16\,\text{ms}$ przed resetem licznika) oraz ustawienie interval = 20. Symulacja czasu now = 0x0000000A ($10\,\text{ms}$ po resecie). Oczekiwany rezultat: Funkcja elapsed poprawnie wylicza różnicę ($26\,\text{ms}$), zwraca true i aktualizuje znacznik na wartość 0x0000000A.Test Granic Clampowania: Podanie wartości wejściowej value = 120.0f przy ograniczeniach minValue = 0.0f i maxValue = 100.0f. Oczekiwany rezultat: Funkcja natychmiast ucina wartość i zwraca sztywne 100.0f.Status i WersjaStatus: 🟢 Klasa zaimplementowana / Przetestowana matematycznieWersja: 0.3Autor: Arkadiusz Marek

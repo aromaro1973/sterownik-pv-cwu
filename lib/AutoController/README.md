@@ -1,34 +1,14 @@
-# Moduł AutoController (Off-Grid EMS)
-
-Moduł odpowiada za automatyczną, płynną regulację mocy grzałki CWU w systemie Off-Grid z magazynem energii, współpracującym z falownikiem Anenji.
-
----
-
-## 💡 Główne Założenia Algorytmu
-
-1. **Pre-positioning (Inteligentny Start):**
-   Gdy automatyka startuje, nie zaczyna od 0%. Jeśli wykryje, że bateria jest aktualnie ładowana (nadwyżka PV), natychmiast ustawia moc początkową grzałki równą mocy ładowania baterii, optymalizując czas reakcji.
-
-2. **Anty-Czajnik (Szybki Zrzut):**
-   Jeśli w domu zostanie włączone duże urządzenie (np. czajnik), moc pobierana z baterii gwałtownie skoczy. Jeśli skok ten przekroczy próg bezpiecznego rozładowania o więcej niż 500W, sterownik natychmiast zrzuca moc grzałki o 30% lub do zera w ułamku sekundy.
-
-3. **Regulacja Krokowa (500ms):**
-   Co 500 ms algorytm analizuje bilans baterii:
-   * **Rozładowanie > próg (np. 400W):** Zmniejsza moc grzałki o około 200W, by odciążyć akumulator.
-   * **Rozładowanie < próg / Ładowanie:** Zwiększa moc grzałki o około 100W, by "wyciągnąć" maksymalną dostępną moc z paneli PV.
-
----
-
-## 🛠 Struktura Modułu
-
-* `AutoController.h` - Definicja klasy, zmiennych wewnętrznych oraz metod sterujących.
-* `AutoController.cpp` - Logika wykonawcza algorytmu dopasowana do sensorów falownika Anenji.
-
----
-
-## 🧭 Metody Publiczne
-
-```cpp
-void begin(uint16_t nominalHeaterPower);
-void reset();
-uint8_t calculateOffGridPower(int32_t powerPV, int32_t powerInv, int32_t powerBat, int32_t maxBatDischargeW, bool guardianBlocked);
+# AutoController
+Zadanie modułuModuł AutoController implementuje główny algorytm decyzyjny Hybrydowego Systemu Zarządzania Energią (EMS).Działa w pętli logiki biznesowej na CORE 1. Jego nadrzędnym celem jest automatyczne śledzenie nadwyżek energii z fotowoltaiki na podstawie bilansu mocy akumulatora off-grid (współpraca z falownikami typu Anenji/PowMr) i optymalne przekierowanie tej energii do grzałki, dbając o maksymalne wykorzystanie słońca przy jednoczesnej ochronie magazynu energii przed głębokim rozładowaniem.Algorytm Sterowania Hybrydowego ($0\% - 40\% / 100\%$)W celu ochrony filtrów wejściowych falownika przed udarami prądowymi i harmonicznymi generowanymi podczas cięcia sinusoidy w jej punkcie szczytowym ($90^\circ$), AutoController realizuje unikalną, dwustrefową strategię sterowania:Strefa Płynna (Fazowa) [$0\% - 40\%$]: W tym zakresie moduł realizuje precyzyjną, krokową regulację mocy. Kąt wyzwalania triaka nie przekracza punktu krytycznego, co drastycznie ogranicza emisję zakłóceń EM.Strefa Martwa (Zablokowana) [$41\% - 99\%$]: Algorytm ma bezwzględny zakaz ustawiania tych wartości. Cięcie sinusoidy w tym obszarze generowałoby zbyt duże tętnienia prądu szkodliwe dla falownika off-grid.Strefa Pełnej Fali [$100\%$]: Jeśli nadwyżka energii znacznie przewyższa zapotrzebowanie grzałki, następuje bezpieczne, skokowe przełączenie na pełne przewodzenie (czysta, nienaruszona sinusoida sieciowa).Logika Funkcjonalna i Bezpieczeństwo1. Szybki Start z Nadwyżki (Pre-positioning)Algorytm po resecie lub uruchomieniu nie inkrementuje mocy od zera. Jeśli wykryje, że prąd ładowania akumulatora jest wysoki (powerBat < 0), przelicza dostępną nadwyżkę w Watach na procenty wysterowania grzałki i natychmiast ustawia wyliczoną moc startową (z zachowaniem barier hybrydowych), skracając czas reakcji systemu o kilkanaście sekund.2. Pętla Taktowania Kroków (Tuning pod Falownik)Czas reakcji wewnętrznego procesora falowników off-grid na zmianę obciążenia wynosi zazwyczaj od $400\,\text{ms}$ do $800\,\text{ms}$. Z tego powodu krok regulacyjny automatyki został zablokowany na sztywny interwał 500 ms. Zapobiega to wpadaniu układu w niebezpieczne oscylacje (tzw. zjawisko rozkołysania pętli sprzężenia zwrotnego).3. Mechanizm Anty-CzajnikW przypadku wykrycia nagłego, dużego poboru mocy przez inne urządzenie domowe (np. czajnik, pompa), akumulator przechodzi w stan głębokiego rozładowania (powerBat > maxBatDischargeW + 500W). AutoController natychmiast omija standardową pętlę opóźnień i w trybie awaryjnym zbija wysterowanie triaka o $15\%$ lub, jeśli pracował na $100\%$, natychmiast ucieka do bezpiecznej strefy $40\%$, błyskawicznie odciążając system.4. Histereza Przejścia ($40\% \rightarrow 100\%$)Przełączenie z limitu fazowego ($40\%$) na pełną moc ($100\%$) następuje wyłącznie wtedy, gdy prąd ładowania akumulatora wykazuje wysoki zapas mocy. Algorytm wylicza brakującą moc ($60\%$ mocy grzałki) i pozwala na skok na $100\%$ tylko wtedy, gdy chwilowa nadwyżka pokrywa minimum $70\%$ tego zapotrzebowania. Zapobiega to ciągłemu, "migającemu" przełączaniu przekaźnika/triaka na granicy stref.Wejścia i WyjściaWejścia (API Wykonawcze)powerPV — aktualna moc generowana przez moduły fotowoltaiczne [W].powerInv — sumaryczne obciążenie wyjściowe falownika [W].powerBat — bilans prądu baterii [W] (wartości ujemne = ładowanie/nadwyżka, wartości dodatnie = rozładowanie).maxBatDischargeW — dopuszczalny, bezpieczny limit drenowania baterii na cele grzewcze (z Config.h, np. 400W).guardianBlocked — flaga sprzętowego odcięcia wstrzykiwana bezpośrednio z modułu Guardian.WyjściaWartość typu uint8_t z przedziału [0, 40] lub sztywna wartość 100 reprezentująca zadany procent wysterowania dla PhaseController.Współpraca z modułami  [ ESPNowManager ] ───► (Dane telemetryczne baterii i PV)
+                               │
+                               ▼
+                        ┌──────────────┐
+                        │AutoController│ (CORE 1 - Decyzje o podziale stref)
+                        └──────┬───────┘
+                               │
+                               ▼ (Wartość wysterowania: 0-40% lub 100%)
+                     [ main.cpp / Szyna Systemu ]
+                               │
+                               ▼
+                  [ PhaseController (CORE 0) ]
+Scenariusze Testowe (QA)Test Przejścia Przez Strefę Martwą: Zaobserwowanie zachowania systemu przy stabilnym, liniowym wzroście nadwyżki. Oczekiwany rezultat: Algorytm podnosi moc płynnie do $40\%$, po czym zatrzymuje się na tej wartości. Gdy prąd ładowania przekroczy barierę obliczonej histerezy, moc natychmiast skacze z $40\%$ na $100\%$. Wartości takie jak $60\%$ czy $80\%$ nigdy nie pojawiają się na wyjściu.Test Aktywacji Filtra Anty-Czajnik: Uruchomienie dużego obciążenia w domu podczas pracy grzałki na $100\%$. Oczekiwany rezultat: W pierwszym cyklu $500\,\text{ms}$ moc zostaje zrzucona do poziomu $40\%$, drastycznie zmniejszając prąd rozładowania akumulatora i chroniąc falownik przed przeciążeniem.Status i WersjaStatus: 🟢 Zaktualizowany i zweryfikowany pod kątem logiki hybrydowej $0\%-40\%/100\%$Wersja: 0.3Autor: Arkadiusz Marek

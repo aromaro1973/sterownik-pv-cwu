@@ -1,200 +1,24 @@
-# Sterownik Nadwyżki PV
-
-## Autor
-
-Arkadiusz Marek
-
-Projekt wykonywany przy współpracy z ChatGPT.
-
----
-
-## Cel projektu
-
-Sterownik nadwyżki energii z instalacji fotowoltaicznej oparty o ESP32.
-
-Projekt przeznaczony jest do płynnego sterowania grzałką CWU w instalacji off-grid poprzez wykorzystanie nadwyżki energii z paneli fotowoltaicznych.
-
-Projekt rozwijany jest modułowo. Każdy moduł jest projektowany, testowany i zatwierdzany oddzielnie, a następnie integrowany z pozostałymi elementami systemu.
-
----
-
-## Funkcje
-
-- płynna regulacja mocy grzałki CWU
-- detekcja przejścia przez zero (H11AA1)
-- sterowanie triakiem przez MOC3083
-- algorytm BurstFire
-- ręczny panel sterowania (OFF / AUTO / MANUAL)
-- wyświetlacz LCD 2×16
-- komunikacja WiFi
-- integracja z Home Assistant
-- moduł Guardian zabezpieczający pracę falownika
-- komunikacja ESP-NOW
-
----
-
-## Wersja
-
-**v0.2.1**
-
----
-
-## Zasady wersjonowania
-
-- **v0.x.x** – rozwój projektu oraz testy.
-- **v1.0.0** – pierwsza stabilna wersja po zakończeniu testów.
-
----
-
-# Status projektu
-
-## Moduły ukończone
-
-- ✅ PlatformIO
-- ✅ GitHub
-- ✅ Struktura projektu
-- ✅ Config
-- ✅ Logger
-- ✅ ZeroCross V2
-- ✅ HeaterOutput
-- ✅ BurstFire
-- ✅ DisplayManager
-- ✅ WiFiManager
-- ✅ ControlPanel
-
-## Moduły w trakcie
-
-- ⏳ AutoController
-- ⏳ Guardian
-- ⏳ ESPNowManager
-- ⏳ Home Assistant
-
----
-
-## Sprzęt
-
-- ESP32 DevKit V1
-- H11AA1
-- MOC3083
-- Triak AKW33
-- LCD 2×16 I²C (0x27)
-
----
-
-## Środowisko
-
-- PlatformIO
-- Visual Studio Code
-- Git
-- GitHub
-
----
-
-## Aktualny stan
-
-### Zakończone testy
-
-- ✅ Logger
-- ✅ ZeroCross V2
-- ✅ Detekcja przejścia przez zero H11AA1
-- ✅ Sterowanie MOC3083
-- ✅ Test triaka z żarówką 100 W
-- ✅ Test BurstFire 0–100%
-- ✅ Pomiar prądu cęgami
-- ✅ Uruchomienie LCD 2×16
-- ✅ Integracja DisplayManager
-- ✅ Integracja ControlPanel
-- ✅ Tryby OFF / AUTO / MANUAL
-- ✅ Regulacja mocy 0–100% z przycisków
-- ✅ Test z grzałką 1800 W
-
----
-
-## Wyniki testów sprzętowych
-
-### Żarówka 100 W
-
-- poprawne sterowanie triakiem
-- poprawna praca BurstFire
-- regulacja mocy 0–100%
-
-### Grzałka CWU 1800 W
-
-- poprawna regulacja mocy
-- około 5 A przy 60%
-- około 6,8 A przy 100%
-- temperatura radiatora około 23°C przy 60%
-- temperatura radiatora około 30°C po zagotowaniu wody przy 100%
-- układ pracował stabilnie
-
----
-
-## Kolejne etapy projektu
-
-- dokumentacja projektu
-- panel WiFi
-- integracja z Home Assistant
-- AutoController
-- Guardian
-- pomiar temperatury radiatora
-- testy długotrwałe
-- pomiar temperatury CWU
-
----
-
-## Architektura projektu
-
-Każdy moduł projektu jest rozwijany i testowany niezależnie.
-
-Obecne moduły:
-
-- Config
-- Logger
-- ZeroCross
-- HeaterOutput
-- BurstFire
-- DisplayManager
-- ControlPanel
-- WiFiManager
-
----
-
-## Aktualna architektura sterownika
-
-```
-ControlPanel
-        │
-        ▼
-AutoController
-        │
-        ▼
-Guardian
-        │
-        ▼
-BurstFire
-        │
-        ▼
-HeaterOutput
-        │
-        ▼
-Triak
-        │
-        ▼
-Grzałka CWU
-```
-
----
-
-## Status
-
-Projekt znajduje się w fazie aktywnego rozwoju.
-
-Każdy moduł jest projektowany, testowany oraz zatwierdzany oddzielnie, a następnie integrowany z pozostałymi elementami systemu.
-
-Po zakończeniu wszystkich testów planowane jest wydanie pierwszej stabilnej wersji **v1.0.0**.
-
-## Licencja
-
-Projekt rozwijany hobbystycznie.
-
-© Arkadiusz Marek
+# Sterownik Nadwyżki Energii PV (EMS Off-Grid Multi-Core)Opis Projektu
+Projekt techniczny zaawansowanego, dwurdzeniowego systemu zarządzania energią (EMS) opartego na mikrokontrolerze ESP32. System automatycznie monitoruje i bilansuje energię w domowej sieci wydzielonej (Off-Grid) opartej o falowniki hybrydowe (np. Anenji, PowMr).Głównym zadaniem urządzenia jest bezprzewodowe śledzenie produkcji z paneli fotowoltaicznych oraz bilansu prądu akumulatora, a następnie przekierowanie czystej nadwyżki energetycznej do lokalnego odbiornika rezystancyjnego (grzałka bufora CWU) bez rozładowywania magazynu energii.Architektura Systemu i Alokacja Rdzeni (Multi-Core Execution)W celu zapewnienia absolutnego bezpieczeństwa przeciwpożarowego oraz stabilności fazowej, zadania sterownika zostały rygorystycznie rozdzielone pomiędzy dwa rdzenie procesora ESP32 za pomocą systemu operacyjnego FreeRTOS:┌────────────────────────────────────────────────────────────────────────┐
+│                              PROCESOR ESP32                            │
+├──────────────────────────────────────┬─────────────────────────────────┤
+│               CORE 0                 │             CORE 1              │
+│       (Warstwa Wykonawcza)           │      (Warstwa Biznesowa)        │
+├──────────────────────────────────────┼─────────────────────────────────┤
+│ * ZeroCross (Detekcja zera sieci)    │ * AutoController (Algorytm EMS) │
+│ * PhaseController (Triak i fazówki)  │ * ESPNowManager (Odbiór danych) │
+│                                      │ * WiFiManager (Asynchroniczne IP)│
+│                                      │ * Guardian (Ochrona przed udarem)│
+│                                      │ * ControlPanel & DisplayManager │
+└──────────────────────────────────────┴─────────────────────────────────┘
+Kluczowe Cechy Systemu1. Hybrydowy Algorytm Sterowania ($0\% - 40\% \ / \ 100\%$)W celu maksymalnego odciążenia układów kluczujących falownika i eliminacji harmonicznych generowanych przy głębokim cięciu sinusoidy, sterownik wprowadza unikalny podział stref pracy:Praca płynna ($0\% - 40\%$): Precyzyjne dozowanie mocy grzałki (sterowanie fazowe) bez przekraczania krytycznego punktu załamania fali ($90^\circ$).Strefa zabroniona ($41\% - 99\%$): Blokada programowa. System nie pozwala na generowanie prądów udarowych w tym zakresie.Praca pełną falą ($100\%$): Bezpośrednie przejście skokowe na pełną sinusoidę sieciową za pomocą wbudowanej histerezy, gdy nadwyżka pokrywa zapotrzebowanie odbiornika.2. Cyfrowa Ochrona Przeciążeniowa (Guardian)Nadrzędna pętla bezpieczeństwa uniemożliwia uszkodzenie falownika przy gwałtownych skokach obciążenia w domowej sieci (np. włączenie czajnika, hydroforu). Moduł natychmiastowo zrzuca moc grzałki, chroniąc stopień wyjściowy AC oraz bezpieczniki.3. Bezprzewodowa Telemetria (ESP-NOW)Komunikacja z falownikiem odbywa się poprzez dedykowany, ultra-lekki protokół warstwy MAC omijający tradycyjne struktury IP. Pozwala to na asynchroniczny odbiór pakietów co ok. $500\,\text{ms}$ z minimalnym narzutem energetycznym.Struktura Katalogów i ModułówProjekt został zorganizowany w sposób modularny i obiektowy. Każda klasa odpowiada za ściśle wydzielony proces logiczny:/src/ControlPanel/ — Odczyt fizycznych przycisków, eliminacja drgań styków (hardware debounce) oraz iniekcja impulsów do maszyny stanów menu./src/ESPNowManager/ — Bezprzewodowy, zoptymalizowany mostek C++ dla callbacków ESP-IDF, wyliczanie wskaźników utraconych ramek (QoS)./src/AutoController/ — Mózg systemu; implementacja logiki krokowej automatyki off-grid z algorytmem anty-czajnikowym i pre-pozycjonowaniem./src/WiFiManager/ — Asynchroniczne utrzymanie łączności Wi-Fi w tle wraz z autonomicznym programowym Watchdogiem (reset po 30s zawieszenia sieci)./src/Utils/ — Bezstanowy zasobnik systemowy eliminujący fragmentację pamięci RAM (zerowa alokacja obiektów na stercie dzięki const char*)./src/Logger/ — Centralny, zoptymalizowany moduł diagnostyczny przesyłający strumień sformatowanych danych diagnostycznych z użyciem makra F() (pamięć Flash).Diagram Przepływu Danych i Sterowania  [ Nadajnik Falownika ] ───(ESP-NOW 2.4GHz)───► [ ESPNowManager ]
+                                                        │
+                                                        ▼ (Moc PV, INV, BAT)
+ [ Przycisk / Klawiatura ] ──► [ ControlPanel ] ──► [ AutoController ]
+                                                        │
+                                                        ▼ (Zadany % Mocy)
+ [ Czujnik Przejścia Zera ] ─► [ ZeroCross ]    ──► [ Guardian (Lock?) ]
+                                                        │
+                                                        ▼ (Weryfikacja limitów)
+                                                    [ PhaseController ] ──► [ FIZYCZNY TRIAK ]
+Scenariusze Awaryjne i Bezpieczeństwo (Failsafe)Utrata połączenia radiowego (Timeout): Brak pakietu z falownika przez okres powyżej 7 sekund w trybie AUTO skutkuje natychmiastowym, bezpiecznym zerowaniem mocy wykonawczej (Power = 0). Urządzenie zapobiega w ten sposób drenowaniu baterii na podstawie nieaktualnych danych telemetrycznych.Aktywacja Blokady Guardiana: Wykrycie anomalii sieciowej powoduje natychmiastowy twardy reset maszyny stanów automatyki, wyłączenie grzałki oraz nadpisanie ekranu LCD komunikatem alarmowym. Powrót do normalnej pracy następuje automatycznie po ustąpieniu przeciążenia.Specyfikacja TechnicznaPlatforma: ESP32 (NodeMCU-32S / ESP-WROOM-32)Środowisko: PlatformIO / Arduino FrameworkWersja oprogramowania (FW_VERSION): 0.3Domyślna prędkość UART: 115200 bodówCzęstotliwość pętli regulacji: 2 Hz (próbkowanie co 500 ms)Status ProjektuStatus: 🟢 Moduły zintegrowane w pętli głównej main.cpp.Aktualny etap: Testy laboratoryjne stabilności hybrydowej zmiany stref pod zmiennym obciążeniem symulowanym.Autor: Arkadiusz Marek

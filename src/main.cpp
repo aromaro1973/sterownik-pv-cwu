@@ -4,13 +4,12 @@
 #include <Config.h>
 #include <Utils.h>
 #include <ZeroCross.h>
-#include <BurstFire.h>
-#include <HeaterOutput.h>
 #include <WiFiManager.h>
 #include <DisplayManager.h>
 #include <ControlPanel.h>
 #include <Guardian.h>
 #include <AutoController.h>
+#include <PhaseController.h>
 #include <ESPNowManager.h> // Obsługa komunikacji radiowej
 
 
@@ -19,8 +18,7 @@
 //==================================================
 Logger logger;
 ZeroCross zeroCross;
-BurstFire burstFire;
-HeaterOutput heaterOutput;
+PhaseController phaseController;
 WiFiManager wifiManager;
 DisplayManager displayManager;
 ControlPanel controlPanel;
@@ -59,8 +57,7 @@ void setup() {
     logger.info("Wersja: " + String(FW_VERSION));
 
     // Inicjalizacja układów wykonawczych i peryferiów
-    zeroCross.begin();
-    heaterOutput.begin();
+    zeroCross.begin();   
     displayManager.begin();
     controlPanel.begin();
     
@@ -70,8 +67,7 @@ void setup() {
     // Start połączenia WiFi w tle (nieblokujący)
     wifiManager.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    // Zerowanie mocy na starcie systemu
-    burstFire.setPower(0);
+  
 
     // Konfiguracja początkowa wyświetlacza
     displayManager.setMode(WorkMode::OFF);
@@ -194,7 +190,7 @@ void loop()
         }
 
         // Przekazanie aktualnych nastawów do modułów wykonawczych i LCD
-        burstFire.setPower(power);
+      
         displayManager.setPower(power);
         displayManager.setBurst(power);
         displayManager.setHeaterState(power > 0);
@@ -238,22 +234,7 @@ void loop()
         }
     }
 
-    //==================================================
-    // Sterowanie Grzałką (Pociąg wykonawczy zera sieci)
-    //==================================================
-    if (zeroCross.available())
-    {
-        // Sprzętowy dubel zabezpieczenia bezpośrednio na wyjściu klucza
-        if (guardian.isBlocked())
-        {
-            heaterOutput.off();
-        }
-        else
-        {
-            if (burstFire.next()) heaterOutput.on();
-            else                  heaterOutput.off();
-        }
-    }
+   
 
     displayManager.setFrequency(zeroCross.getFrequency());
 
