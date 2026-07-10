@@ -3,14 +3,17 @@
 
 #include <Arduino.h>
 
+/**
+ * @struct InverterPacket
+ * @brief Odchudzona struktura ramki danych telemerycznych przesyłana przez ESP-NOW.
+ * * Rozmiar struktury po optymalizacji to dokładnie 10 bajtów.
+ * Przeznaczona do bezpośredniego mapowania surowego bufora pamięci (Zero-Copy).
+ */
 struct __attribute__((packed)) InverterPacket {
-    uint32_t packetId;       // Linia 7: ID pakietu (zapobiega zgubionym ramkom)
-    uint16_t pvPower;        // Linia 8: Moc z paneli PV
-    uint16_t inverterPower;  // Linia 9: Moc oddawana przez falownik
-    int16_t  batteryPower;   // Linia 10: Znak +/- wyliczony przez drugie ESP
-    uint8_t  soc;            // Linia 11: Stan naładowania w %
-    float    batteryVoltage; // Linia 12: Napięcie baterii
-    float    batteryCurrent; // Linia 13: Prąd baterii
+    uint32_t packetId;       // ID pakietu (Inkrementacja monotoniczna do kontroli QoS)
+    uint16_t pvPower;        // Bieżąca moc generowana przez panele PV [W]
+    uint16_t inverterPower;  // Obciążenie wyjściowe AC falownika (pobór domu) [W]
+    int16_t  batteryPower;   // Bilans mocy akumulatora [W] (ujemna = ładowanie, dodatnia = rozładowanie)
 };
 
 #endif // INVERTER_PACKET_H

@@ -70,31 +70,27 @@ void ESPNowManager::handleRx(const uint8_t* incomingData, int len)
 
         uint32_t now = millis();
         
-        // 1. Obliczanie czasu przesyłu (interwału) między pakietami
+        // 1. Obliczanie interwału między pakietami
         if (m_packetCounter > 0) {
             m_lastPeriodMs = now - m_lastPacketTime;
         }
 
-        // 2. Wyliczanie zgubionych pakietów na podstawie Packet ID
+        // 2. Wyliczanie zgubionych pakietów (QoS)
         if (!m_firstPacketReceived) {
             m_firstPacketReceived = true;
             m_expectedPacketId = packet.packetId + 1;
         } else {
             if (packet.packetId > m_expectedPacketId) {
-                // Jeśli dostaliśmy wyższe ID niż oczekiwane, oznacza to lukę (zgubione pakiety)
                 m_lostPackets += (packet.packetId - m_expectedPacketId);
             }
             m_expectedPacketId = packet.packetId + 1;
         }
 
-        // Przypisanie danych falownika
-        m_pvPower        = packet.pvPower;
-        m_inverterPower  = packet.inverterPower;
-        m_batteryPower   = packet.batteryPower; 
-        m_soc            = packet.soc;
-        m_batteryVoltage = packet.batteryVoltage;
-        m_batteryCurrent = packet.batteryCurrent;
-        m_housePower     = packet.inverterPower; 
+        // Przypisanie odchudzonych danych z falownika
+        m_pvPower       = packet.pvPower;
+        m_inverterPower = packet.inverterPower;
+        m_batteryPower  = packet.batteryPower; 
+        m_housePower    = packet.inverterPower; 
 
         m_packetCounter++;
         m_lastPacketTime = now;

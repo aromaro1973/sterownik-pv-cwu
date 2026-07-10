@@ -11,7 +11,7 @@
 #include <AutoController.h>
 #include <PhaseController.h>
 #include <ESPNowManager.h> // Obsługa komunikacji radiowej
-
+#include <HAManager.h>
 
 //==================================================
 // Instancje obiektów globalnych
@@ -26,11 +26,17 @@ Guardian guardian;
 ESPNowManager espNowManager;
 AutoController autoController;
 
+// KLUCZOWA POPRAWKA: Przeniesione PONIŻEJ obiektów, od których zależy HAManager
+WiFiClient espClient;
+HAManager haManager(espClient, espNowManager, guardian, controlPanel);
+
 //==================================================
 // Zmienne pomocnicze
 //==================================================
 uint32_t logTimer = 0;
 bool wifiConnectedLogged = false;
+
+// ... dalej kod bez zmian (setup i loop) ...
 
 //==================================================
 // Sekcja Setup
@@ -66,6 +72,9 @@ void setup() {
 
     // Start połączenia WiFi w tle (nieblokujący)
     wifiManager.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    // Po zainicjalizowaniu wifiManager.begin(...)
+    haManager.begin("111.222.33.44", 1883, "username_mqtt", "haslo_mqtt"); // Podaj IP swojego brokera Mosquitto w HA
 
   
 
@@ -119,6 +128,8 @@ void loop()
     // ==================================================
     // Guardian potrzebuje wiedzieć, jaki poziom mocy aktualnie przetwarzamy
     guardian.update();
+
+    haManager.update();
 
     //==================================================
     // Maszyna Stanów: Zarządzanie Menu i Pracą
