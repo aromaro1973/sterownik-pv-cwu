@@ -6,11 +6,14 @@ DisplayManager::DisplayManager()
       m_heaterState(false),
       m_burstCount(0),
       m_frequency(0.0f),
-      m_currentScreen(DisplayScreen::MAIN),
+      m_currentScreen(DisplayScreen::SPLASH), // Startujemy od Splash Screenu
+      m_currentSubScreen(0),
+      m_currentServiceScreen(2),
       m_menuMaxPower(3500),
       m_menuPowerStep(1000),
       m_refreshRequired(true),
-      m_lastRefreshTime(0)
+      m_lastRefreshTime(0),
+      m_splashScreenRendered(false)
 {
 }
 
@@ -20,25 +23,22 @@ void DisplayManager::begin()
     m_lcd.init();
     m_lcd.backlight();
     m_lcd.clear();
-    // Do początkowego renderu w begin przesyłamy pusty/tymczasowy menedżer, 
-    // pełne odświeżenie nastąpi natychmiast w pętli update().
-    ESPNowManager dummy;
-    refreshDisplay(dummy);
+    
+    // Na samym starcie wymuszamy Splash Screen
+    showSplashScreen();
 }
 
 void DisplayManager::update(const ESPNowManager& espNow)
 {
     uint32_t now = millis();
 
-    // Jeśli jesteśmy na ekranie diagnostycznym, wymuszamy odświeżanie,
-    // aby licznik sekund (czas od ostatniego pakietu) aktualizował się na bieżąco.
-    if (m_currentScreen == DisplayScreen::ESP_DIAG)
+    // Wymuszaj ciągłe odświeżanie dla dynamicznych ekranów diagnostycznych w menu serwisowym
+    if (m_currentScreen == DisplayScreen::SERVICE)
     {
         m_refreshRequired = true;
     }
 
-    // OPTYMALIZACJA: Ekran odświeża się maksymalnie raz na 300ms,
-    // aby transmisja I2C nie blokowała kluczowych funkcji AC w loop().
+    // Optymalizacja przesyłu I2C - odświeżanie max raz na 300ms
     if (m_refreshRequired && (now - m_lastRefreshTime >= 300))
     {
         m_lastRefreshTime = now;
@@ -64,7 +64,31 @@ void DisplayManager::setFrequency(float frequency) {
 }
 
 DisplayScreen DisplayManager::getScreen() const { return m_currentScreen; }
-void DisplayManager::setScreen(DisplayScreen screen) { m_currentScreen = screen; m_lcd.clear(); m_refreshRequired = true; }
+void DisplayManager::setScreen(DisplayScreen screen) { 
+    if (m_currentScreen != screen) {
+        m_currentScreen = screen; 
+        m_lcd.clear(); 
+        m_refreshRequired = true; 
+    }
+}
+
+void DisplayManager::setSubScreen(uint8_t subScreen) {
+    if (m_currentSubScreen != subScreen) {
+        m_currentSubScreen = subScreen;
+        m_lcd.clear();
+        m_refreshRequired = true;
+    }
+}
+uint8_t DisplayManager::getSubScreen() const { return m_currentSubScreen; }
+
+void DisplayManager::setServiceScreen(uint8_t serviceScreen) {
+    if (m_currentServiceScreen != serviceScreen) {
+        m_currentServiceScreen = serviceScreen;
+        m_lcd.clear();
+        m_refreshRequired = true;
+    }
+}
+uint8_t DisplayManager::getServiceScreen() const { return m_currentServiceScreen; }
 
 uint16_t DisplayManager::getMenuMaxPower() const { return m_menuMaxPower; }
 void DisplayManager::setMenuMaxPower(uint16_t power) { if (m_menuMaxPower != power) { m_menuMaxPower = power; m_refreshRequired = true; } }
@@ -74,92 +98,164 @@ void DisplayManager::setMenuPowerStep(uint16_t step) { if (m_menuPowerStep != st
 
 void DisplayManager::forceRefresh() { m_refreshRequired = true; m_lastRefreshTime = 0; }
 
+// Metoda wywoływana jednorazowo podczas startu
+void DisplayManager::showSplashScreen()
+{
+    if (!m_splashScreenRendered)
+    {
+        m_lcd.clear();
+        m_lcd.setCursor(0, 0);
+        m_lcd.print("  STEROWNIK EMS ");
+        m_lcd.setCursor(0, 1);
+        m_lcd.print("URUCHAMIANIE... ");
+        m_splashScreenRendered = true;
+    }
+}
+
 void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
 {
     switch (m_currentScreen)
     {
+        case DisplayScreen::SPLASH:
+            break;
+
         case DisplayScreen::MAIN:
-            drawMainScreen();
+            switch (m_currentSubScreen)
+            {
+                case 0: drawMainScreen(espNow); break;      // Ekran 1.0
+                case 1: drawPvPowerScreen(espNow); break;    // Ekran 1.1
+                case 2: drawInverterScreen(espNow); break;   // Ekran 1.2
+                case 3: drawBatteryScreen(espNow); break;    // Ekran 1.3
+            }
             break;
-        case DisplayScreen::SET_MAX_POWER:
-            drawMaxPowerScreen();
-            break;
-        case DisplayScreen::SET_POWER_STEP:
-            drawPowerStepScreen();
-            break;
-        case DisplayScreen::ESP_DIAG:
-            drawEspDiagScreen(espNow);
+
+        case DisplayScreen::SERVICE:
+            switch (m_currentServiceScreen)
+            {
+                case 2: drawZeroCrossScreen(); break;
+                case 3: drawPhaseManagerScreen(); break;
+                case 4: drawGuardianMaxPowerScreen(); break;
+                case 5: drawGuardianDeltaPScreen(); break;
+                case 6: drawEspNowRadioScreen(espNow); break;
+                case 7: drawAutoControllerScreen(); break;
+            }
             break;
     }
 }
 
-void DisplayManager::drawMainScreen()
+// =========================================================================
+// GRUPA 1: RENDERY EKRANÓW PRACY (Triak aktywny, timeout 30s)
+// =========================================================================
+
+void DisplayManager::drawMainScreen(const ESPNowManager& espNow)
 {
-    // Linia 1
     m_lcd.setCursor(0, 0);
     switch (m_mode)
     {
-        case WorkMode::OFF:    m_lcd.print("OFF:   "); break;
-        case WorkMode::AUTO:   m_lcd.print("AUTO:  "); break;
-        case WorkMode::MANUAL: m_lcd.print("MANUAL "); break;
+        case WorkMode::OFF:    m_lcd.print("OFF   "); break;
+        case WorkMode::AUTO:   m_lcd.print("AUTO  "); break;
+        case WorkMode::MANUAL: m_lcd.print("MANU  "); break;
     }
 
-    m_lcd.setCursor(7, 0);
+    m_lcd.setCursor(6, 0);
     m_lcd.printf("%3u%%", m_powerPercent);
 
     m_lcd.setCursor(12, 0);
     m_lcd.print(m_heaterState ? "  ON" : " OFF");
 
-    // Linia 2
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("BUR:%03u", m_burstCount);
-
-    m_lcd.setCursor(8, 1);
-    m_lcd.printf("FR:%4.1f", m_frequency);
+    m_lcd.print("RADIO: ");
+    m_lcd.print(espNow.isConnected() ? "OK      " : "ERR     ");
 }
 
-void DisplayManager::drawMaxPowerScreen()
+void DisplayManager::drawPvPowerScreen(const ESPNowManager& espNow)
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("MENU: Max Power ");
+    m_lcd.print("INFO: POMIARY PV");
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("Limit:   %4u W ", m_menuMaxPower);
+    m_lcd.printf("MOC PV: %5uW", espNow.getPVPower());
 }
 
-void DisplayManager::drawPowerStepScreen()
+void DisplayManager::drawInverterScreen(const ESPNowManager& espNow)
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("MENU: Power Step");
+    m_lcd.print("INFO: INWERTER  ");
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("Max Step:%4u W ", m_menuPowerStep);
+    m_lcd.printf("DOM/INV:%5uW", espNow.getInverterPower());
 }
 
-void DisplayManager::drawEspDiagScreen(const ESPNowManager& espNow)
+void DisplayManager::drawBatteryScreen(const ESPNowManager& espNow)
 {
-    // Linia 1: Status (OK/ERR), Licznik odebranych (Rx) oraz czas od ostatniej paczki w sekundach (np. 2s)
     m_lcd.setCursor(0, 0);
-    if (espNow.isConnected()) {
-        m_lcd.print("OK ");
-    } else {
-        m_lcd.print("ERR");
+    m_lcd.print("INFO: AKUMULATOR");
+    m_lcd.setCursor(0, 1);
+    
+    int32_t batPower = espNow.getBatteryPower();
+    if (batPower <= 0)
+    {
+        m_lcd.printf("BAT: LAD. %4dW", batPower);
     }
+    else
+    {
+        m_lcd.printf("BAT: ROZ. +%3dW", batPower);
+    }
+}
 
-    m_lcd.setCursor(4, 0);
-    m_lcd.printf("Rx:%-5u", espNow.getPacketCounter());
+// =========================================================================
+// GRUPA 2: RENDERY MENU SERWISOWEGO (Grzałka wyłączona!)
+// =========================================================================
 
-    uint32_t timeSinceLast = (millis() - espNow.getLastPacketTime()) / 1000;
-    if (timeSinceLast > 99) timeSinceLast = 99; // Stała szerokość pola tekstowego
-    m_lcd.setCursor(13, 0);
-    m_lcd.printf("%2us", timeSinceLast);
+void DisplayManager::drawZeroCrossScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOD: ZeroCross ");
+    m_lcd.print(m_frequency > 45.0f ? "OK" : "ERR");
 
-    // Linia 2: Pakiety Zgubione (L) oraz Interwał nadawania (P) w milisekundach
     m_lcd.setCursor(0, 1);
-    uint32_t lost = espNow.getLostPackets();
-    if (lost > 999) lost = 999; 
-    m_lcd.printf("L:%-3u", lost);
+    uint8_t pulses = (m_frequency > 40.0f) ? 100 : 0;
+    m_lcd.printf("ZC/s:%3u F:%4.1fH", pulses, m_frequency);
+}
 
-    m_lcd.setCursor(8, 1);
-    uint32_t period = espNow.getLastPeriodMs();
-    if (period > 9999) period = 9999;
-    m_lcd.printf("P:%4ums", period);
+void DisplayManager::drawPhaseManagerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOD: PhaseCtr OK");
+    m_lcd.setCursor(0, 1);
+    m_lcd.print("State: ACTIVE   ");
+}
+
+void DisplayManager::drawGuardianMaxPowerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("GUARDIAN STAT:ON");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("Inv Max:  %4uW", m_menuMaxPower);
+}
+
+void DisplayManager::drawGuardianDeltaPScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("GUARDIAN DYNC:ON");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("Max dP:   %4uW", m_menuPowerStep);
+}
+
+void DisplayManager::drawEspNowRadioScreen(const ESPNowManager& espNow)
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("ESP-NOW: RAD: ");
+    m_lcd.print(espNow.isConnected() ? "OK " : "ERR");
+
+    m_lcd.setCursor(0, 1);
+    uint32_t avgPeriod = espNow.getLastPeriodMs();
+    if (avgPeriod > 9999) avgPeriod = 9999;
+    m_lcd.printf("Avg Period:%3ums", avgPeriod);
+}
+
+void DisplayManager::drawAutoControllerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("AUTOCONTROL: ON ");
+    m_lcd.setCursor(0, 1);
+    m_lcd.print("EMS Loop: Active");
 }

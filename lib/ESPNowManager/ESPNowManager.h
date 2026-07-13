@@ -16,10 +16,12 @@ public:
     uint32_t getPacketCounter() const;
     uint32_t getLastPacketTime() const;
     
-    // Nowe gettery diagnostyczne:
+    // Gettery diagnostyczne
     uint32_t getLostPackets() const;
-    uint32_t getLastPeriodMs() const; // czas jaki upłynął między ostatnimi dwoma pakietami
+    uint32_t getLastPeriodMs() const;
+    uint32_t getAverageIntervalMs() const;
 
+    // Gettery danych z falownika
     uint16_t getInverterPower() const;
     uint16_t getPVPower() const;
     int16_t  getBatteryPower() const; 
@@ -36,12 +38,18 @@ private:
     uint32_t m_packetCounter;
     uint32_t m_lastPacketTime;
     
-    // Nowe zmienne diagnostyczne:
+    // Statystyki pakietów
     uint32_t m_lastPeriodMs;
     uint32_t m_lostPackets;
     uint32_t m_expectedPacketId;
     bool     m_firstPacketReceived;
 
+    // Bufor kołowy do uśredniania interwałów
+    uint32_t m_intervals[5];
+    uint8_t  m_intervalIdx;
+    void addIntervalSample(uint32_t sample);
+
+    // Dane z falownika
     uint16_t m_inverterPower;
     uint16_t m_pvPower;
     int16_t  m_batteryPower;

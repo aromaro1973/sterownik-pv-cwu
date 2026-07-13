@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <Config.h>
 
-
 class ControlPanel
 {
 public:
@@ -13,31 +12,33 @@ public:
     void begin();
     void update();
 
-    // Gettery stanu (dla kompatybilności w trybie MAIN, jeśli potrzebne, 
-    // ale teraz logikę przenosimy do main.cpp lub zarządzamy nią z zewnątrz)
     WorkMode getMode() const;
     void setMode(WorkMode mode);
     
     uint8_t getManualPower() const;
     void setManualPower(uint8_t power);
 
-    // NOWOŚĆ: Funkcje sprawdzające, czy dany przycisk został właśnie KLIKNIĘTY
-    // Odczytanie metody automatycznie zeruje flagę kliknięcia (czysty impuls)
+    // Funkcje sprawdzające zdarzenia (odczyt automatycznie zeruje flagę)
     bool wasModePressed();
+    bool wasModeLongPressed(); // <-- NOWOŚĆ: Detekcja przytrzymania 2s
     bool wasPlusPressed();
     bool wasMinusPressed();
 
 private:
     void readButtons();
 
-    // Stan pracy przetrzymywany w klasie
     WorkMode m_mode;
     uint8_t  m_manualPower;
 
     // Flagi zdarzeń (impulsów) dla loop()
     bool m_modeClicked;
+    bool m_modeLongPressed;    // <-- NOWOŚĆ
     bool m_plusClicked;
     bool m_minusClicked;
+
+    // Wsparcie dla długiego kliknięcia MODE
+    bool m_modeActive;             // Flaga czy przycisk MODE jest aktualnie trzymany
+    uint32_t m_modePressStartTime; // Czas wciśnięcia przycisku MODE
 
     // Aktualny stan fizyczny pinów do wykrywania zboczy
     bool m_lastModeState;

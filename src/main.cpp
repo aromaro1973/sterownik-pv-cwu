@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <WiFi.h> // <-- DODAJ TĘ LINIJKĘ
+#include <WiFi.h> 
 #include <esp_wifi.h> // Wymagane do bezpośredniej kontroli kanału Wi-Fi dla ESP-NOW
 
 #include <Logger.h>
@@ -11,7 +11,7 @@
 #include <Guardian.h>
 #include <AutoController.h>
 #include <PhaseController.h>
-#include <ESPNowManager.h> // Obsługa komunikacji radiowej (Zostaje)
+#include <ESPNowManager.h>
 
 //==================================================
 // Instancje obiektów globalnych
@@ -26,10 +26,27 @@ ESPNowManager espNowManager;
 AutoController autoController;
 
 //==================================================
-// Zmienne pomocnicze
+// Nowe Definicje Ekranów i Stanów Systemu (Zgodnie z Założeniami)
 //==================================================
+enum class SystemState {
+    SPLASH_SCREEN,      // Ekran startowy (3 sekundy, wymuszony OFF)
+    GROUP_1_WORK,       // Grupa 1: Ekrany pracy (1.0, 1.1, 1.2, 1.3)
+    GROUP_2_SERVICE     // Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 do 7)
+};
+
+// Zmienne stanów
+SystemState currentSystemState = SystemState::SPLASH_SCREEN;
+uint8_t currentSubScreen = 0; // Dla Grupy 1: 0 = Główny 1.0, 1 = PV 1.1, 2 = Dom 1.2, 3 = Bat 1.3
+uint8_t currentServiceScreen = 2; // Dla Grupy 2: Ekrany diagnostyki od 2 do 7
+
+//==================================================
+// Zmienne czasowe (Tymery i Timeouty)
+//==================================================
+uint32_t splashScreenTimer = 0;     // Timer dla 3-sekundowego startu
+uint32_t group1TimeoutTimer = 0;    // Timeout 30 sekund braku aktywności w Grupie 1
+uint32_t serviceTimeoutTimer = 0;   // Timeout 30 sekund braku aktywności w Menu Serwisowym
 uint32_t logTimer = 0;
-uint32_t lastEspNowPacketTime = 0; // 7-sekundowy nieblokujący bufor braku sygnału
+uint32_t lastEspNowPacketTime = 0;  // Failsafe 7 sekund (brak ramek)
 
 //==================================================
 // Sekcja Setup
@@ -37,16 +54,14 @@ uint32_t lastEspNowPacketTime = 0; // 7-sekundowy nieblokujący bufor braku sygn
 void setup() {
     Serial.begin(115200);
     
-    // 1. Inicjalizacja loggera na samym początku, by monitorować start systemu
+    // 1. Inicjalizacja loggera na samym początku
     logger.begin(SERIAL_BAUDRATE);
-    logger.info(F("Sterownik Nadwyzki PV (Tryb Autonomiczny)"));
+    logger.info(F("Sterownik Nadwyzki PV (EMS Wersja Lokalna)"));
     logger.info("Wersja: " + String(FW_VERSION));
     
-    // 2. Konfiguracja warstwy radiowej wyłącznie dla ESP-NOW (Bez skakania po kanałach)
+    // 2. Konfiguracja warstwy radiowej ESP-NOW
     WiFi.mode(WIFI_STA); 
-    WiFi.disconnect(); // Czyszczenie pozostałości profilów sieciowych z pamięci Flash
-    
-    // Wymuszenie pracy radia na KANALE 1 (zgodnie z konfiguracją nadajnika Anenji)
+    WiFi.disconnect(); 
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     
     Serial.print("Mój adres MAC to: ");
@@ -55,7 +70,7 @@ void setup() {
     // 3. Inicjalizacja odbiornika ESP-NOW
     espNowManager.begin();
     
-    // 4. Inicjalizacja algorytmu Off-Grid (Moc grzałki 2000W)
+    // 4. Inicjalizacja algorytmu Off-Grid
     autoController.begin(2000); 
 
     // 5. Inicjalizacja układów wykonawczych i peryferiów
@@ -66,227 +81,361 @@ void setup() {
     // 6. Inicjalizacja strażnika przeciążeniowego
     guardian.begin(2000); 
 
-    // 7. Konfiguracja początkowa wyświetlacza
+    // 7. BEZPIECZNY START (Założenie 1)
+    // Sterownik zawsze startuje w trybie OFF i z mocą 0%.
+    controlPanel.setMode(WorkMode::OFF);
+    controlPanel.setManualPower(0);
+    
     displayManager.setMode(WorkMode::OFF);
     displayManager.setPower(0);
     displayManager.setBurst(0);
     displayManager.setHeaterState(false);
     
-    // Zrzucenie startowych limitów z menu wyświetlacza do modułu Guardian
-    guardian.setMaxPower(displayManager.getMenuMaxPower());
-    guardian.setPowerStep(displayManager.getMenuPowerStep());
-
-    // Inicjalizacja zmiennej czasu, aby zapobiec fałszywemu wyzwoleniu timeoutu przy starcie
+    // Przypisanie początkowego czasu, aby uniknąć fałszywych timeoutów na starcie
     lastEspNowPacketTime = millis();
+    splashScreenTimer = millis(); // Start odmierzania 3 sekund ekranu powitalnego
     
-    logger.info(F("Setup zakończony pomyślnie. System gotowy do pracy."));
+    logger.info(F("Inicjalizacja pomyślna. Rozpoczęto Splash Screen."));
 }
 
 //==================================================
 // Główna pętla programu
 //==================================================
-//==================================================
-// Główna pętla programu
-//==================================================
 void loop()
 {
-    // Aktualizacja modułu radiowego (Odbiór ramek z Anenji)
+    // Aktualizacja modułu radiowego oraz peryferiów wejściowych
     espNowManager.update();
-
-    // Aktualizacja modułów wejściowych i wykonawczych
     zeroCross.update();
     controlPanel.update(); 
+    guardian.update();
 
     // Odczyt impulsów kliknięć z panelu sterowania
-    bool modeClicked  = controlPanel.wasModePressed();
+    bool modeClicked  = controlPanel.wasModePressed();      // Krótki klik MODE
+    bool modeHeld     = controlPanel.wasModeLongPressed();  // Długi klik MODE (np. wejście/wyjście z serwisu - 2s)
     bool plusClicked  = controlPanel.wasPlusPressed();
     bool minusClicked = controlPanel.wasMinusPressed();
 
-    // Pobranie aktualnego stanu systemu
-    DisplayScreen currentScreen = displayManager.getScreen();
+    // Resetowanie timera aktywności w przypadku wykrycia jakiegokolwiek kliknięcia
+    bool anyActivity = modeClicked || modeHeld || plusClicked || minusClicked;
+
+    // Pobranie bieżących trybów pracy
     WorkMode mode = controlPanel.getMode();
     uint8_t power = controlPanel.getManualPower();
 
     // --- Diagnostyka zamrożonych danych ---
     static int16_t lastPVPower = -1;
     static uint32_t lastDataChangeTime = 0;
-
-    // Inicjalizacja czasu przy pierwszym uruchomieniu, aby uniknąć fałszywego startu
     if (lastDataChangeTime == 0) {
         lastDataChangeTime = millis();
     }
 
-    // Aktualizacja stanu Guardiana w pętli
-    guardian.update();
-
-    // Maszyna Stanów: Zarządzanie Menu i Pracą
-    if (currentScreen == DisplayScreen::MAIN)
+    // =========================================================================
+    // Nadrzędna Maszyna Stanów Sterownika EMS
+    // =========================================================================
+    switch (currentSystemState)
     {
-        // ---------------------------------------------
-        // EKRAN GŁÓWNY (Normalna praca urządzenia)
-        // ---------------------------------------------
-        if (modeClicked)
+        // ---------------------------------------------------------------------
+        // 1. Ekran Startowy (Splash Screen) - Założenie 1
+        // ---------------------------------------------------------------------
+        case SystemState::SPLASH_SCREEN:
         {
-            // Cykliczne przełączanie trybu pracy: OFF -> AUTO -> MANUAL -> OFF
-            if (mode == WorkMode::OFF)         mode = WorkMode::AUTO;
-            else if (mode == WorkMode::AUTO)   mode = WorkMode::MANUAL;
-            else if (mode == WorkMode::MANUAL) mode = WorkMode::OFF;
-            
-            power = 0; // Bezpieczny reset mocy przy zmianie trybu
-            autoController.reset(); // Reset automatyki przy wejściu/wyjściu z trybu
+            // Wymuś bezpieczny start - wyłączona grzałka
+            power = 0;
+            mode = WorkMode::OFF;
             controlPanel.setMode(mode);
             controlPanel.setManualPower(power);
-        }
 
-        // --- Obsługa Logiki Trybów Pracy ---
-        if (mode == WorkMode::MANUAL)
-        {
-            // Sterowanie mocą w trybie ręcznym
-            if (plusClicked && power < 100)  power += 10;
-            if (minusClicked && power >= 10) power -= 10;
-            controlPanel.setManualPower(power);
-        }
-        else if (mode == WorkMode::AUTO)
-        {
-            // 1. Sprawdzenie, czy doszedł fizyczny pakiet sieciowy
-            if (espNowManager.isConnected())
+            // Wyświetl Splash Screen (Obsługiwane w DisplayManager na podstawie flagi/stanu)
+            displayManager.showSplashScreen(); 
+
+            // Po upływie 3 sekund przejdź do normalnej pracy
+            if (millis() - splashScreenTimer >= 3000)
             {
-                lastEspNowPacketTime = millis();
+                logger.info(F("Splash Screen zakończony. Urządzenie gotowe do pracy w trybie OFF."));
+                
+                // Przełączenie trybu wyświetlacza na ekran pracy
+                displayManager.setScreen(DisplayScreen::MAIN); // <<< POPRAWKA
+                
+                currentSystemState = SystemState::GROUP_1_WORK;
+                currentSubScreen = 0; // Zacznij od Ekranu Głównego 1.0
+                group1TimeoutTimer = millis(); // Rozpocznij odliczanie 30s dla ekranów pracy
+                displayManager.forceRefresh();
+            }
+            break;
+        }
 
-                // Sprawdzenie, czy dane przesyłane z nadajnika "żyją" i się zmieniają
-                if (espNowManager.getPVPower() != lastPVPower)
+        // ---------------------------------------------------------------------
+        // 2. Grupa 1: Ekrany Pracy (Normalne sterowanie) - Założenie 2
+        // ---------------------------------------------------------------------
+        case SystemState::GROUP_1_WORK:
+        {
+            // Aktualizacja timera aktywności (powrót do 1.0 po 30s bezczynności)
+            if (anyActivity) {
+                group1TimeoutTimer = millis();
+            }
+
+            // Timeout 30 sekund: Jeśli jesteśmy na podekranie (1.1, 1.2, 1.3) i nic nie klikamy -> wróć do 1.0
+            if (currentSubScreen != 0 && (millis() - group1TimeoutTimer >= 30000))
+            {
+                currentSubScreen = 0;
+                displayManager.forceRefresh();
+                logger.info(F("[TIMEOUT] Brak aktywności przez 30s. Powrót do ekranu głównego 1.0."));
+            }
+
+            // --- Obsługa DŁUGIEGO kliknięcia MODE (Wejście do Menu Serwisowego) ---
+            if (modeHeld)
+            {
+                logger.info(F("Wejście do Menu Serwisowego (Grupa 2). Bezpieczne wyłączenie grzałki!"));
+                currentSystemState = SystemState::GROUP_2_SERVICE;
+                currentServiceScreen = 2; // Zacznij od Ekranu 2 (Diagnostyka ZeroCross)
+                serviceTimeoutTimer = millis(); // Reset timera bezczynności dla serwisu
+                
+                // Przełączenie wyświetlacza na tryb serwisowy
+                displayManager.setScreen(DisplayScreen::SERVICE); // <<< POPRAWKA
+
+                // BEZPIECZEŃSTWO: Całkowite wyłączenie grzałki przy diagnostyce serwisowej
+                power = 0;
+                mode = WorkMode::OFF;
+                controlPanel.setMode(mode);
+                controlPanel.setManualPower(power);
+                autoController.reset();
+                displayManager.forceRefresh();
+                break; // Przerwij pętlę dla tej klatki
+            }
+
+            // --- Obsługa KRÓTKIEGO kliknięcia MODE (Zmiana trybu pracy) ---
+            if (modeClicked)
+            {
+                // OFF -> AUTO -> MANUAL -> OFF
+                if (mode == WorkMode::OFF)         mode = WorkMode::AUTO;
+                else if (mode == WorkMode::AUTO)   mode = WorkMode::MANUAL;
+                else if (mode == WorkMode::MANUAL) mode = WorkMode::OFF;
+                
+                power = 0; // Bezpieczny reset mocy przy każdej zmianie trybu
+                autoController.reset();
+                controlPanel.setMode(mode);
+                controlPanel.setManualPower(power);
+                
+                // Przy zmianie trybu automatycznie wracamy na ekran główny 1.0
+                currentSubScreen = 0; 
+                displayManager.forceRefresh();
+            }
+
+            // --- Obsługa Przycisków PLUS/MINUS w zależności od trybu pracy ---
+            if (mode == WorkMode::MANUAL)
+            {
+                // W trybie MANUAL: Podekrany są zablokowane. Przyciski bezpośrednio zmieniają moc
+                // Regulacja o 10% w zakresie 0% - 40% LUB bezpośredni skok na 100%
+                if (plusClicked)
                 {
-                    lastPVPower = espNowManager.getPVPower();
-                    lastDataChangeTime = millis(); // Rejestrujemy faktyczną zmianę wartości
+                    if (power < 40) {
+                        power += 10;
+                    } else if (power == 40) {
+                        power = 100; // Skok bezpośredni na 100%
+                    }
+                }
+                if (minusClicked)
+                {
+                    if (power == 100) {
+                        power = 40;  // Powrót ze 100% na 40%
+                    } else if (power >= 10) {
+                        power -= 10;
+                    }
+                }
+                controlPanel.setManualPower(power);
+            }
+            else
+            {
+                // W trybach AUTO / OFF: Przyciski PLUS/MINUS służą do nawigacji po podekranach (1.1, 1.2, 1.3)
+                if (plusClicked)
+                {
+                    currentSubScreen = (currentSubScreen + 1) % 4; // Rotacja: 0 -> 1 -> 2 -> 3 -> 0
+                    displayManager.forceRefresh();
+                }
+                if (minusClicked)
+                {
+                    currentSubScreen = (currentSubScreen == 0) ? 3 : currentSubScreen - 1; // Rotacja w tył
+                    displayManager.forceRefresh();
                 }
             }
 
-            // 2. Weryfikacja liczników bezpieczeństwa (Cisza radiowa LUB zamrożony odczyt)
-            bool radioTimeout  = (millis() - lastEspNowPacketTime > 7000);
-            bool frozenTimeout = (millis() - lastDataChangeTime > 7000);
-
-            if (radioTimeout || frozenTimeout)
+            // --- Logika Bezpieczeństwa / Algorytm nadwyżek (Tryb AUTO) ---
+            if (mode == WorkMode::AUTO)
             {
-                // WYMUSZENIE ZMIANY TRYBU NA MANUAL I ZEROWANIE MOCY
-                mode = WorkMode::MANUAL;
+                // 1. Sprawdzenie odbioru pakietu ESP-NOW
+                if (espNowManager.isConnected())
+                {
+                    lastEspNowPacketTime = millis();
+                    if (espNowManager.getPVPower() != lastPVPower)
+                    {
+                        lastPVPower = espNowManager.getPVPower();
+                        lastDataChangeTime = millis(); // Rejestracja zmiany telemetrycznej
+                    }
+                }
+
+                // 2. Failsafe 7 sekund (Brak ramek LUB zamrożony odczyt) - Założenie 4
+                bool radioTimeout  = (millis() - lastEspNowPacketTime > 7000);
+                bool frozenTimeout = (millis() - lastDataChangeTime > 7000);
+
+                if (radioTimeout || frozenTimeout)
+                {
+                    // Wymuszenie awaryjnego zrzutu do MANUAL 0%
+                    mode = WorkMode::MANUAL;
+                    power = 0;
+                    controlPanel.setMode(mode);
+                    controlPanel.setManualPower(power);
+                    autoController.reset();
+
+                    if (radioTimeout) {
+                        logger.info(F("[FAILSAFE 7s] Brak komunikacji ESP-NOW! Bezpieczny zrzut do MANUAL 0%."));
+                    } else {
+                        logger.info(F("[FAILSAFE 7s] Zamrożenie danych telemetrycznych! Bezpieczny zrzut do MANUAL 0%."));
+                    }
+                }
+                else
+                {
+                    // Normalne wyliczanie mocy na podstawie nadwyżki PV
+                    power = autoController.calculateOffGridPower(
+                        espNowManager.getPVPower(),
+                        espNowManager.getInverterPower(),
+                        espNowManager.getBatteryPower(), 
+                        MAX_BATTERY_DRAW_W, // Wartość 400W z config.h
+                        guardian.isBlocked()
+                    );
+                }
+                controlPanel.setManualPower(power);
+            }
+
+            // Aktualizacja parametrów na wyświetlaczu w zależności od aktywnego podekranu
+            displayManager.setSubScreen(currentSubScreen); 
+            break;
+        }
+
+        // ---------------------------------------------------------------------
+        // 3. Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 - 7) - Założenie 3
+        // ---------------------------------------------------------------------
+        case SystemState::GROUP_2_SERVICE:
+        {
+            // Grzałka w tym trybie jest całkowicie wyłączona (power = 0, stan = OFF)
+            power = 0;
+            mode = WorkMode::OFF;
+
+            // Timer aktywności dla menu serwisowego (powrót do normalnej pracy po 30s)
+            if (anyActivity) {
+                serviceTimeoutTimer = millis();
+            }
+
+            // Warunek wyjścia z menu serwisowego: brak aktywności przez 30 sekund LUB kliknięcie MODE na Ekranie 7
+            bool serviceTimeout = (millis() - serviceTimeoutTimer >= 30000);
+            bool exitServiceClicked = (currentServiceScreen == 7 && modeClicked);
+
+            if (serviceTimeout || exitServiceClicked || modeHeld)
+            {
+                logger.info(F("Wyjście z Menu Serwisowego. Przywrócenie sterowania i powrót na Ekran 1.0."));
+                
+                // Przełączenie trybu wyświetlacza z powrotem na ekrany główne
+                displayManager.setScreen(DisplayScreen::MAIN); // <<< POPRAWKA
+
+                // Przywrócenie ustawień początkowych przy wyjściu z serwisu (zrzut do domyślnego trybu OFF)
+                currentSystemState = SystemState::GROUP_1_WORK;
+                currentSubScreen = 0; 
+                
+                mode = WorkMode::OFF;
                 power = 0;
                 controlPanel.setMode(mode);
                 controlPanel.setManualPower(power);
                 autoController.reset();
-
-                if (radioTimeout) {
-                    logger.info(F("[WATCHDOG] Brak pakietów przez 7s! Wymuszono tryb MANUAL 0%."));
-                } else {
-                    logger.info(F("[WATCHDOG] Dane zamrożone przez 7s! Wymuszono tryb MANUAL 0%."));
-                }
+                
+                displayManager.forceRefresh();
+                break;
             }
-            else
+
+            // --- Nawigacja w Menu Serwisowym za pomocą krótkiego kliknięcia MODE ---
+            if (modeClicked)
             {
-                // Parametry prawidłowe -> Obliczanie algorytmu nadwyżki
-                power = autoController.calculateOffGridPower(
-                    espNowManager.getPVPower(),
-                    espNowManager.getInverterPower(),
-                    espNowManager.getBatteryPower(), 
-                    400,                                             // Próg bezpieczeństwa rozładowania (400W)
-                    guardian.isBlocked()                             // Stan blokady sprzętowej Guardiana
-                );
+                // Przejście do kolejnego ekranu (zapis następuje automatycznie w momencie przejścia)
+                if (currentServiceScreen == 4) {
+                    // Ekran 4 (Ustawienia Guardian - Max moc): Zapisz do modułu Guardian
+                    guardian.setMaxPower(displayManager.getMenuMaxPower());
+                    logger.info("Zapisano automatycznie: Guardian Inv Max = " + String(displayManager.getMenuMaxPower()) + "W");
+                }
+                else if (currentServiceScreen == 5) {
+                    // Ekran 5 (Ustawienia Guardian - Delta P): Zapisz do modułu Guardian
+                    guardian.setPowerStep(displayManager.getMenuPowerStep());
+                    logger.info("Zapisano automatycznie: Guardian Delta P = " + String(displayManager.getMenuPowerStep()) + "W");
+                }
+
+                currentServiceScreen++; // Przejście na następny ekran (2 -> 3 -> 4 -> 5 -> 6 -> 7)
+                displayManager.forceRefresh();
             }
-            controlPanel.setManualPower(power);
-        }
-        
-        // Wejście do menu zaawansowanych ustawień Guardiana:
-        if (mode == WorkMode::OFF && plusClicked)
-        {
-            displayManager.setScreen(DisplayScreen::SET_MAX_POWER);
-        }
 
-        // ==================================================
-        // ABSOLUTNY NADRZĘDNY BEZPIECZNIK (Dla każdego stanu)
-        // ==================================================
-        if (guardian.isBlocked())
-        {
-            power = 0; 
-            displayManager.setMode(WorkMode::OFF); 
+            // --- Regulacja parametrów na ekranach konfiguracyjnych (PLUS/MINUS) ---
+            if (currentServiceScreen == 4)
+            {
+                // Regulacja maksymalnej mocy falownika co 100W (zakres np. 100W - 4000W)
+                uint16_t currentMax = displayManager.getMenuMaxPower();
+                if (plusClicked && currentMax < 4000)   currentMax += 100;
+                if (minusClicked && currentMax >= 100)  currentMax -= 100;
+                displayManager.setMenuMaxPower(currentMax);
+            }
+            else if (currentServiceScreen == 5)
+            {
+                // Regulacja dP (Anty-czajnik / Delta P) co 50W (zakres np. 50W - 3000W)
+                uint16_t currentStep = displayManager.getMenuPowerStep();
+                if (plusClicked && currentStep < 3000)  currentStep += 50;
+                if (minusClicked && currentStep >= 50) currentStep -= 50;
+                displayManager.setMenuPowerStep(currentStep);
+            }
+
+            // Przekazanie do managera wyświetlacza informacji, który ekran diagnostyczny renderować
+            displayManager.setServiceScreen(currentServiceScreen);
+            break;
         }
-        else 
-        {
-            displayManager.setMode(mode);
-        }
-      
-        displayManager.setPower(power);
-        displayManager.setBurst(power);
-        displayManager.setHeaterState(power > 0);
     }
-    else if (currentScreen == DisplayScreen::SET_MAX_POWER)
+
+    // =========================================================================
+    // Fizyczny sterownik triaka i synchronizacja wyświetlania
+    // =========================================================================
+    
+    // Blokada bezpieczeństwa Guardiana (Ma charakter nadrzędny w trybie pracy)
+    if (currentSystemState == SystemState::GROUP_1_WORK && guardian.isBlocked())
     {
-        // ---------------------------------------------
-        // MENU 1: Limit maksymalnego obciążenia (Waty)
-        // ---------------------------------------------
-        uint16_t currentMax = displayManager.getMenuMaxPower();
-
-        if (plusClicked && currentMax < 4000)   currentMax += 100; 
-        if (minusClicked && currentMax >= 100)  currentMax -= 100; 
-        displayManager.setMenuMaxPower(currentMax);
-
-        if (modeClicked)
-        {
-            displayManager.setScreen(DisplayScreen::SET_POWER_STEP);
-        }
+        power = 0; 
+        displayManager.setMode(WorkMode::OFF); 
     }
-    else if (currentScreen == DisplayScreen::SET_POWER_STEP)
+    else 
     {
-        // ---------------------------------------------
-        // MENU 2: Limit nagłego skoku mocy (Waty)
-        // ---------------------------------------------
-        uint16_t currentStep = displayManager.getMenuPowerStep();
-
-        if (plusClicked && currentStep < 3000)  currentStep += 100;
-        if (minusClicked && currentStep >= 100) currentStep -= 100;
-        displayManager.setMenuPowerStep(currentStep);
-
-        if (modeClicked)
-        {
-            guardian.setMaxPower(displayManager.getMenuMaxPower());
-            guardian.setPowerStep(displayManager.getMenuPowerStep());
-            
-            logger.info(F("Zapisano nowe limity modułu Guardian."));
-            
-            displayManager.setScreen(DisplayScreen::MAIN);
-            displayManager.forceRefresh(); 
-        }
+        displayManager.setMode(mode);
     }
-
+  
+    // Wysterowanie fizycznych struktur wyświetlacza i regulatora fazowego
+    displayManager.setPower(power);
+    displayManager.setHeaterState(power > 0);
     displayManager.setFrequency(zeroCross.getFrequency());
 
     //==================================================
-    // Logger Diagnostyczny (Czas rzeczywisty - Prawdziwy status)
+    // Logger Diagnostyczny (Co 1 sekundę w tle)
     //==================================================
     if (Utils::elapsed(logTimer, LOG_INTERVAL))
     {
-        String logMsg = "Mode=" + String((int)mode) +
+        String logMsg = "State=" + String((int)currentSystemState) +
+                        " Mode=" + String((int)mode) +
                         " Power=" + String(power) + "%" +
                         " Freq=" + String(zeroCross.getFrequency(), 1);
                         
-        if (guardian.isBlocked()) 
-        {
-            logMsg += " [ALARM: GUARDIAN BLOCKED - OVERLOAD/STEP CRASH!]";
-        }
-        else 
-        {
-            // Radio pokazuje czystą informację o połączeniu sprzętowym
+        if (guardian.isBlocked()) {
+            logMsg += " [ALARM: GUARDIAN BLOCKED!]";
+        } else {
             if (espNowManager.isConnected()) {
                 logMsg += " [Radio: OK]";
             } else {
                 logMsg += " [Radio: DISCONNECTED]";
             }
         }
-
-        // Zawsze loguj aktualnie posiadane dane telemetryczne
-        logMsg += " PV=" + String(espNowManager.getPVPower()) + 
-                  "W Bat=" + String(espNowManager.getBatteryPower()) + "W";
-        
+        logMsg += " PV=" + String(espNowManager.getPVPower()) + "W";
         logger.info(logMsg);
     }
 
+    // Przesłanie wszystkich niezbędnych danych telemetrycznych do odświeżenia ekranu OLED/LCD
     displayManager.update(espNowManager); 
 }
