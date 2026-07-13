@@ -59,7 +59,7 @@ constexpr uint16_t LOG_INTERVAL = 1000;
 // ---------- Sieć WiFi (Dla ESP-NOW / Monitoringu) ----------
 
 constexpr char WIFI_SSID[] = "solidarnosc";
-constexpr char WIFI_PASSWORD[] = "56315235";
+constexpr char WIFI_PASSWORD[] = "56315236";
 
 // ---------- Tryby pracy sterownika ----------
 enum class WorkMode {

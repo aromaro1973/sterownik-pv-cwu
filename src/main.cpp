@@ -1,17 +1,17 @@
 #include <Arduino.h>
+#include <WiFi.h> // <-- DODAJ TĘ LINIJKĘ
+#include <esp_wifi.h> // Wymagane do bezpośredniej kontroli kanału Wi-Fi dla ESP-NOW
 
 #include <Logger.h>
 #include <Config.h>
 #include <Utils.h>
 #include <ZeroCross.h>
-#include <WiFiManager.h>
 #include <DisplayManager.h>
 #include <ControlPanel.h>
 #include <Guardian.h>
 #include <AutoController.h>
 #include <PhaseController.h>
-#include <ESPNowManager.h> // Obsługa komunikacji radiowej
-#include <HAManager.h>
+#include <ESPNowManager.h> // Obsługa komunikacji radiowej (Zostaje)
 
 //==================================================
 // Instancje obiektów globalnych
@@ -19,24 +19,17 @@
 Logger logger;
 ZeroCross zeroCross;
 PhaseController phaseController;
-WiFiManager wifiManager;
 DisplayManager displayManager;
 ControlPanel controlPanel;
 Guardian guardian;
 ESPNowManager espNowManager;
 AutoController autoController;
 
-// KLUCZOWA POPRAWKA: Przeniesione PONIŻEJ obiektów, od których zależy HAManager
-WiFiClient espClient;
-HAManager haManager(espClient, espNowManager, guardian, controlPanel);
-
 //==================================================
 // Zmienne pomocnicze
 //==================================================
 uint32_t logTimer = 0;
-bool wifiConnectedLogged = false;
-
-// ... dalej kod bez zmian (setup i loop) ...
+uint32_t lastEspNowPacketTime = 0; // 7-sekundowy nieblokujący bufor braku sygnału
 
 //==================================================
 // Sekcja Setup
@@ -44,41 +37,36 @@ bool wifiConnectedLogged = false;
 void setup() {
     Serial.begin(115200);
     
-    // Konfiguracja trybu WiFi oraz odczyt adresu MAC dla drugiego ESP
+    // 1. Inicjalizacja loggera na samym początku, by monitorować start systemu
+    logger.begin(SERIAL_BAUDRATE);
+    logger.info(F("Sterownik Nadwyzki PV (Tryb Autonomiczny)"));
+    logger.info("Wersja: " + String(FW_VERSION));
+    
+    // 2. Konfiguracja warstwy radiowej wyłącznie dla ESP-NOW (Bez skakania po kanałach)
     WiFi.mode(WIFI_STA); 
+    WiFi.disconnect(); // Czyszczenie pozostałości profilów sieciowych z pamięci Flash
+    
+    // Wymuszenie pracy radia na KANALE 1 (zgodnie z konfiguracją nadajnika Anenji)
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    
     Serial.print("Mój adres MAC to: ");
     Serial.println(WiFi.macAddress());
     
-    // Inicjalizacja odbiornika ESP-NOW
+    // 3. Inicjalizacja odbiornika ESP-NOW
     espNowManager.begin();
     
-    // Inicjalizacja algorytmu Off-Grid (Podaj realną moc grzałki, np. 2000W)
+    // 4. Inicjalizacja algorytmu Off-Grid (Moc grzałki 2000W)
     autoController.begin(2000); 
 
-    // Inicjalizacja portu szeregowego
-    logger.begin(SERIAL_BAUDRATE);
-
-    // Komunikaty startowe (teksty statyczne przeniesione do pamięci FLASH)
-    logger.info(F("Sterownik Nadwyzki PV"));
-    logger.info("Wersja: " + String(FW_VERSION));
-
-    // Inicjalizacja układów wykonawczych i peryferiów
+    // 5. Inicjalizacja układów wykonawczych i peryferiów
     zeroCross.begin();   
     displayManager.begin();
     controlPanel.begin();
     
-    // Inicjalizacja strażnika (podajemy domyślną moc grzałki)
+    // 6. Inicjalizacja strażnika przeciążeniowego
     guardian.begin(2000); 
 
-    // Start połączenia WiFi w tle (nieblokujący)
-    wifiManager.begin(WIFI_SSID, WIFI_PASSWORD);
-
-    // Po zainicjalizowaniu wifiManager.begin(...)
-    haManager.begin("111.222.33.44", 1883, "username_mqtt", "haslo_mqtt"); // Podaj IP swojego brokera Mosquitto w HA
-
-  
-
-    // Konfiguracja początkowa wyświetlacza
+    // 7. Konfiguracja początkowa wyświetlacza
     displayManager.setMode(WorkMode::OFF);
     displayManager.setPower(0);
     displayManager.setBurst(0);
@@ -87,29 +75,25 @@ void setup() {
     // Zrzucenie startowych limitów z menu wyświetlacza do modułu Guardian
     guardian.setMaxPower(displayManager.getMenuMaxPower());
     guardian.setPowerStep(displayManager.getMenuPowerStep());
+
+    // Inicjalizacja zmiennej czasu, aby zapobiec fałszywemu wyzwoleniu timeoutu przy starcie
+    lastEspNowPacketTime = millis();
+    
+    logger.info(F("Setup zakończony pomyślnie. System gotowy do pracy."));
 }
 
 //==================================================
 // Główna pętla programu
 //==================================================
+//==================================================
+// Główna pętla programu
+//==================================================
 void loop()
 {
-    // Aktualizacja modułu radiowego (Watchdog sygnału)
+    // Aktualizacja modułu radiowego (Odbiór ramek z Anenji)
     espNowManager.update();
 
-    // Obsługa połączenia sieciowego
-    wifiManager.update();
-
-    // Logowanie statusu sieci (wykona się tylko raz po udanym połączeniu)
-    if (wifiManager.isConnected() && !wifiConnectedLogged)
-    {
-        wifiConnectedLogged = true;
-        logger.info(F("WiFi polaczone"));
-        logger.info("IP: " + wifiManager.getIP());
-        logger.info("RSSI: " + String(wifiManager.getRSSI()) + " dBm");
-    }
-
-    // Aktualizacja modułów wejściowych
+    // Aktualizacja modułów wejściowych i wykonawczych
     zeroCross.update();
     controlPanel.update(); 
 
@@ -123,17 +107,19 @@ void loop()
     WorkMode mode = controlPanel.getMode();
     uint8_t power = controlPanel.getManualPower();
 
-    // ==================================================
-    // KROK 1: Aktualizacja stanu Guardiana w pętli
-    // ==================================================
-    // Guardian potrzebuje wiedzieć, jaki poziom mocy aktualnie przetwarzamy
+    // --- Diagnostyka zamrożonych danych ---
+    static int16_t lastPVPower = -1;
+    static uint32_t lastDataChangeTime = 0;
+
+    // Inicjalizacja czasu przy pierwszym uruchomieniu, aby uniknąć fałszywego startu
+    if (lastDataChangeTime == 0) {
+        lastDataChangeTime = millis();
+    }
+
+    // Aktualizacja stanu Guardiana w pętli
     guardian.update();
 
-    haManager.update();
-
-    //==================================================
     // Maszyna Stanów: Zarządzanie Menu i Pracą
-    //==================================================
     if (currentScreen == DisplayScreen::MAIN)
     {
         // ---------------------------------------------
@@ -147,7 +133,7 @@ void loop()
             else if (mode == WorkMode::MANUAL) mode = WorkMode::OFF;
             
             power = 0; // Bezpieczny reset mocy przy zmianie trybu
-            autoController.reset(); // Resetujemy automatykę przy wejściu/wyjściu z trybu
+            autoController.reset(); // Reset automatyki przy wejściu/wyjściu z trybu
             controlPanel.setMode(mode);
             controlPanel.setManualPower(power);
         }
@@ -155,28 +141,55 @@ void loop()
         // --- Obsługa Logiki Trybów Pracy ---
         if (mode == WorkMode::MANUAL)
         {
-            // Sterowanie mocą w trybie ręcznym (Działa zawsze, bez względu na radio)
+            // Sterowanie mocą w trybie ręcznym
             if (plusClicked && power < 100)  power += 10;
             if (minusClicked && power >= 10) power -= 10;
             controlPanel.setManualPower(power);
         }
         else if (mode == WorkMode::AUTO)
         {
-            // Inteligentna automatyka Off-Grid oparta na danych radiowych z Anenji
+            // 1. Sprawdzenie, czy doszedł fizyczny pakiet sieciowy
             if (espNowManager.isConnected())
             {
+                lastEspNowPacketTime = millis();
+
+                // Sprawdzenie, czy dane przesyłane z nadajnika "żyją" i się zmieniają
+                if (espNowManager.getPVPower() != lastPVPower)
+                {
+                    lastPVPower = espNowManager.getPVPower();
+                    lastDataChangeTime = millis(); // Rejestrujemy faktyczną zmianę wartości
+                }
+            }
+
+            // 2. Weryfikacja liczników bezpieczeństwa (Cisza radiowa LUB zamrożony odczyt)
+            bool radioTimeout  = (millis() - lastEspNowPacketTime > 7000);
+            bool frozenTimeout = (millis() - lastDataChangeTime > 7000);
+
+            if (radioTimeout || frozenTimeout)
+            {
+                // WYMUSZENIE ZMIANY TRYBU NA MANUAL I ZEROWANIE MOCY
+                mode = WorkMode::MANUAL;
+                power = 0;
+                controlPanel.setMode(mode);
+                controlPanel.setManualPower(power);
+                autoController.reset();
+
+                if (radioTimeout) {
+                    logger.info(F("[WATCHDOG] Brak pakietów przez 7s! Wymuszono tryb MANUAL 0%."));
+                } else {
+                    logger.info(F("[WATCHDOG] Dane zamrożone przez 7s! Wymuszono tryb MANUAL 0%."));
+                }
+            }
+            else
+            {
+                // Parametry prawidłowe -> Obliczanie algorytmu nadwyżki
                 power = autoController.calculateOffGridPower(
                     espNowManager.getPVPower(),
                     espNowManager.getInverterPower(),
                     espNowManager.getBatteryPower(), 
-                    400,                             // Próg bezpieczeństwa rozładowania (400W)
-                    guardian.isBlocked()             // Stan blokady sprzętowej Guardiana
+                    400,                                             // Próg bezpieczeństwa rozładowania (400W)
+                    guardian.isBlocked()                             // Stan blokady sprzętowej Guardiana
                 );
-            }
-            else
-            {
-                // Awaria radia w trybie AUTO -> bezpieczne, automatyczne odcięcie grzałki
-                power = 0;
             }
             controlPanel.setManualPower(power);
         }
@@ -188,19 +201,17 @@ void loop()
         }
 
         // ==================================================
-        // KROK 2: ABSOLUTNY NADRZĘDNY BEZPIECZNIK (Dla każdego stanu)
+        // ABSOLUTNY NADRZĘDNY BEZPIECZNIK (Dla każdego stanu)
         // ==================================================
         if (guardian.isBlocked())
         {
-            power = 0; // Wymuszony reset mocy - blokada przeciążeniowa/skokowa
-            displayManager.setMode(WorkMode::OFF); // Nadpisanie widoku dla ekranu LCD 2x16
+            power = 0; 
+            displayManager.setMode(WorkMode::OFF); 
         }
         else 
         {
             displayManager.setMode(mode);
         }
-
-        // Przekazanie aktualnych nastawów do modułów wykonawczych i LCD
       
         displayManager.setPower(power);
         displayManager.setBurst(power);
@@ -245,12 +256,10 @@ void loop()
         }
     }
 
-   
-
     displayManager.setFrequency(zeroCross.getFrequency());
 
     //==================================================
-    // Logger Diagnostyczny (Rozszerzony o precyzyjne stany)
+    // Logger Diagnostyczny (Czas rzeczywisty - Prawdziwy status)
     //==================================================
     if (Utils::elapsed(logTimer, LOG_INTERVAL))
     {
@@ -258,29 +267,26 @@ void loop()
                         " Power=" + String(power) + "%" +
                         " Freq=" + String(zeroCross.getFrequency(), 1);
                         
-        // Sprawdzenie krytycznej blokady nadrzędnej
         if (guardian.isBlocked()) 
         {
             logMsg += " [ALARM: GUARDIAN BLOCKED - OVERLOAD/STEP CRASH!]";
         }
-        // Analiza stanu komunikacji radiowej
-        else if (espNowManager.isConnected()) 
-        {
-            logMsg += " [Radio: OK] PV=" + String(espNowManager.getPVPower()) + 
-                      "W Bat=" + String(espNowManager.getBatteryPower()) + "W";
-        } 
         else 
         {
-            if (mode == WorkMode::AUTO) {
-                logMsg += " [Radio: DISCONNECTED - AUTO STOPPED]";
+            // Radio pokazuje czystą informację o połączeniu sprzętowym
+            if (espNowManager.isConnected()) {
+                logMsg += " [Radio: OK]";
             } else {
-                logMsg += " [Radio: DISCONNECTED - MANUAL OFFLINE RUN]";
+                logMsg += " [Radio: DISCONNECTED]";
             }
         }
+
+        // Zawsze loguj aktualnie posiadane dane telemetryczne
+        logMsg += " PV=" + String(espNowManager.getPVPower()) + 
+                  "W Bat=" + String(espNowManager.getBatteryPower()) + "W";
         
         logger.info(logMsg);
     }
 
-    // Wyczyszczono podwójny średnik z końca linii
     displayManager.update(espNowManager); 
 }
