@@ -13,7 +13,9 @@ DisplayManager::DisplayManager()
       m_menuPowerStep(1000),
       m_refreshRequired(true),
       m_lastRefreshTime(0),
-      m_splashScreenRendered(false)
+      m_splashScreenRendered(false),
+      m_diagZc(0),          // Inicjalizacja nowych zmiennych
+      m_diagTriggers(0)     // Inicjalizacja nowych zmiennych
 {
 }
 
@@ -105,10 +107,21 @@ void DisplayManager::showSplashScreen()
     {
         m_lcd.clear();
         m_lcd.setCursor(0, 0);
-        m_lcd.print("  STEROWNIK EMS ");
+        m_lcd.print("  STEROWNIK 2.01 ");
         m_lcd.setCursor(0, 1);
         m_lcd.print("URUCHAMIANIE... ");
         m_splashScreenRendered = true;
+    }
+}
+
+// Metoda aktualizująca statystyki diagnostyczne z poziomu pętli loop()
+void DisplayManager::updateDiagnostics(uint32_t zc, uint32_t triggers)
+{
+    if (m_diagZc != zc || m_diagTriggers != triggers)
+    {
+        m_diagZc = zc;
+        m_diagTriggers = triggers;
+        m_refreshRequired = true;
     }
 }
 
@@ -212,16 +225,19 @@ void DisplayManager::drawZeroCrossScreen()
     m_lcd.print(m_frequency > 45.0f ? "OK" : "ERR");
 
     m_lcd.setCursor(0, 1);
-    uint8_t pulses = (m_frequency > 40.0f) ? 100 : 0;
-    m_lcd.printf("ZC/s:%3u F:%4.1fH", pulses, m_frequency);
+    // Wyświetlanie PRAWDZIWYCH impulsów przejścia przez zero na sekundę (m_diagZc) zamiast sztywnych 100/0
+    m_lcd.printf("ZC/s:%3u F:%4.1fH", m_diagZc, m_frequency);
 }
 
 void DisplayManager::drawPhaseManagerScreen()
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("MOD: PhaseCtr OK");
+    m_lcd.print("MOD: PhaseCtr ");
+    m_lcd.print(m_diagTriggers > 0 ? "ACT" : "OFF");
+    
     m_lcd.setCursor(0, 1);
-    m_lcd.print("State: ACTIVE   ");
+    // Wyświetlanie PRAWDZIWYCH wyzwoleń triaka na sekundę zliczonych przez Core 1
+    m_lcd.printf("Trig/s: %3u/100", m_diagTriggers);
 }
 
 void DisplayManager::drawGuardianMaxPowerScreen()
@@ -243,7 +259,7 @@ void DisplayManager::drawGuardianDeltaPScreen()
 void DisplayManager::drawEspNowRadioScreen(const ESPNowManager& espNow)
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("ESP-NOW: RAD: ");
+    m_lcd.print("NADAJNIK: RAD: ");
     m_lcd.print(espNow.isConnected() ? "OK " : "ERR");
 
     m_lcd.setCursor(0, 1);

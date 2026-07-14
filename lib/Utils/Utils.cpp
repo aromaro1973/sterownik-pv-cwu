@@ -1,5 +1,8 @@
 #include <Utils.h>
 
+volatile uint32_t Utils::zcCounter = 0;
+volatile uint32_t Utils::triggerCounter = 0;
+
 float Utils::clamp(float value, float minValue, float maxValue)
 {
     if (value < minValue) return minValue;

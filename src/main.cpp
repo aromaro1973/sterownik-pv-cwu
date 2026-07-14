@@ -88,7 +88,6 @@ void setup() {
     
     displayManager.setMode(WorkMode::OFF);
     displayManager.setPower(0);
-    displayManager.setBurst(0);
     displayManager.setHeaterState(false);
     
     // Przypisanie początkowego czasu, aby uniknąć fałszywych timeoutów na starcie
@@ -154,7 +153,7 @@ void loop()
                 logger.info(F("Splash Screen zakończony. Urządzenie gotowe do pracy w trybie OFF."));
                 
                 // Przełączenie trybu wyświetlacza na ekran pracy
-                displayManager.setScreen(DisplayScreen::MAIN); // <<< POPRAWKA
+                displayManager.setScreen(DisplayScreen::MAIN); 
                 
                 currentSystemState = SystemState::GROUP_1_WORK;
                 currentSubScreen = 0; // Zacznij od Ekranu Głównego 1.0
@@ -191,7 +190,7 @@ void loop()
                 serviceTimeoutTimer = millis(); // Reset timera bezczynności dla serwisu
                 
                 // Przełączenie wyświetlacza na tryb serwisowy
-                displayManager.setScreen(DisplayScreen::SERVICE); // <<< POPRAWKA
+                displayManager.setScreen(DisplayScreen::SERVICE); 
 
                 // BEZPIECZEŃSTWO: Całkowite wyłączenie grzałki przy diagnostyce serwisowej
                 power = 0;
@@ -334,7 +333,7 @@ void loop()
                 logger.info(F("Wyjście z Menu Serwisowego. Przywrócenie sterowania i powrót na Ekran 1.0."));
                 
                 // Przełączenie trybu wyświetlacza z powrotem na ekrany główne
-                displayManager.setScreen(DisplayScreen::MAIN); // <<< POPRAWKA
+                displayManager.setScreen(DisplayScreen::MAIN); 
 
                 // Przywrócenie ustawień początkowych przy wyjściu z serwisu (zrzut do domyślnego trybu OFF)
                 currentSystemState = SystemState::GROUP_1_WORK;
@@ -397,6 +396,33 @@ void loop()
     // Fizyczny sterownik triaka i synchronizacja wyświetlania
     // =========================================================================
     
+    // Przekazanie aktualnej mocy do PhaseControllera w celu wyznaczenia kąta/opóźnienia
+    phaseController.setPower(power);
+
+    // Fizyczna obsługa przejścia przez zero i wyzwalania triaka (Zgodnie z detekcją)
+    if (zeroCross.available())
+    {
+        uint32_t delayUs = phaseController.getDelayMicros();
+
+        // Wyzwalamy tylko wtedy, gdy moc jest większa od zera (opóźnienie < 10ms)
+        if (delayUs < 10000)
+        {
+            if (delayUs > 0)
+            {
+                delayMicroseconds(delayUs); // Odczekanie zadanego kąta fazowego
+            }
+
+            // --- FIZYCZNE WYZWOLENIE TRIAKA ---
+            digitalWrite(PIN_TRIAC, HIGH);
+
+            // Zliczamy wyzwolenie do statystyk diagnostycznych
+            Utils::triggerCounter++; 
+
+            delayMicroseconds(10); // Impuls bramki wymagany do zatrzaśnięcia triaka
+            digitalWrite(PIN_TRIAC, LOW);
+        }
+    }
+
     // Blokada bezpieczeństwa Guardiana (Ma charakter nadrzędny w trybie pracy)
     if (currentSystemState == SystemState::GROUP_1_WORK && guardian.isBlocked())
     {
@@ -408,7 +434,7 @@ void loop()
         displayManager.setMode(mode);
     }
   
-    // Wysterowanie fizycznych struktur wyświetlacza i regulatora fazowego
+    // Wysterowanie fizycznych struktur wyświetlacza
     displayManager.setPower(power);
     displayManager.setHeaterState(power > 0);
     displayManager.setFrequency(zeroCross.getFrequency());
@@ -418,10 +444,23 @@ void loop()
     //==================================================
     if (Utils::elapsed(logTimer, LOG_INTERVAL))
     {
+        // 1. Kopiujemy aktualne wartości z sekcji przerw
+        uint32_t currentZc = Utils::zcCounter;
+        uint32_t currentTriggers = Utils::triggerCounter;
+
+        // 2. Natychmiast zerujemy liczniki w Utils, aby Core 0 i Core 1 zbierały dane na kolejną sekundę
+        Utils::zcCounter = 0;
+        Utils::triggerCounter = 0;
+
+        // 3. Wysyłamy świeże dane sekundowe na wyświetlacz
+        displayManager.updateDiagnostics(currentZc, currentTriggers);
+
+        // 4. Tworzenie pełnego wpisu logowania
         String logMsg = "State=" + String((int)currentSystemState) +
                         " Mode=" + String((int)mode) +
                         " Power=" + String(power) + "%" +
-                        " Freq=" + String(zeroCross.getFrequency(), 1);
+                        " Freq=" + String(zeroCross.getFrequency(), 1) +
+                        " [DIAG: ZC_s=" + String(currentZc) + " TRI_s=" + String(currentTriggers) + "]";
                         
         if (guardian.isBlocked()) {
             logMsg += " [ALARM: GUARDIAN BLOCKED!]";

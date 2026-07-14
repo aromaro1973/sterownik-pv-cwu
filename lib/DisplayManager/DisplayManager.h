@@ -7,11 +7,10 @@
 #include <Config.h>
 #include "ESPNowManager.h"
 
-// Nowa lista ekranów dopasowana do założeń EMS
 enum class DisplayScreen {
-    SPLASH,          // 1. Ekran startowy (Splash screen)
-    MAIN,            // 2. Grupa 1: Ekrany pracy (zawiera podekrany 1.0 - 1.3)
-    SERVICE          // 3. Grupa 2: Głębokie Menu Serwisowe (zawiera ekrany 2 - 7)
+    SPLASH,          
+    MAIN,            
+    SERVICE          
 };
 
 class DisplayManager
@@ -31,7 +30,6 @@ public:
     DisplayScreen getScreen() const;
     void setScreen(DisplayScreen screen);
 
-    // Gettery i settery do nawigacji po grupach ekranów
     void setSubScreen(uint8_t subScreen);
     uint8_t getSubScreen() const;
 
@@ -45,26 +43,29 @@ public:
     void setMenuPowerStep(uint16_t step);
 
     void forceRefresh();
-    void showSplashScreen(); // Flaga wymuszenia natychmiastowego startu rysowania splash
+    void showSplashScreen(); 
+
+    // =========================================================================
+    // NOWOŚĆ: Metoda do aktualizacji liczników diagnostycznych z poziomu main.cpp
+    // =========================================================================
+    void updateDiagnostics(uint32_t zc, uint32_t triggers);
 
 private:
     void refreshDisplay(const ESPNowManager& espNow);
 
-    // --- GRUPA 1: Metody rysujące ekrany pracy ---
-    void drawMainScreen(const ESPNowManager& espNow); // Ekran 1.0
-    void drawPvPowerScreen(const ESPNowManager& espNow); // Podekran 1.1
-    void drawInverterScreen(const ESPNowManager& espNow); // Podekran 1.2
-    void drawBatteryScreen(const ESPNowManager& espNow); // Podekran 1.3
+    void drawMainScreen(const ESPNowManager& espNow); 
+    void drawPvPowerScreen(const ESPNowManager& espNow); 
+    void drawInverterScreen(const ESPNowManager& espNow); 
+    void drawBatteryScreen(const ESPNowManager& espNow); 
 
-    // --- GRUPA 2: Metody rysujące Menu Serwisowe ---
-    void drawZeroCrossScreen(); // Ekran 2 (Diagnostyka ZC)
-    void drawPhaseManagerScreen(); // Ekran 3 (Diagnostyka PhaseManager)
-    void drawGuardianMaxPowerScreen(); // Ekran 4 (Konfiguracja Guardian Max Power)
-    void drawGuardianDeltaPScreen(); // Ekran 5 (Konfiguracja Guardian Delta P)
-    void drawEspNowRadioScreen(const ESPNowManager& espNow); // Ekran 6 (Diagnostyka ESP-NOW)
-    void drawAutoControllerScreen(); // Ekran 7 (Diagnostyka AutoController)
+    void drawZeroCrossScreen(); 
+    void drawPhaseManagerScreen(); 
+    void drawGuardianMaxPowerScreen(); 
+    void drawGuardianDeltaPScreen(); 
+    void drawEspNowRadioScreen(const ESPNowManager& espNow); 
+    void drawAutoControllerScreen(); 
 
-    LiquidCrystal_I2C m_lcd{0x27, 16, 2}; // Adres I2C 0x27, ekran 16x2
+    LiquidCrystal_I2C m_lcd{0x27, 16, 2}; 
 
     WorkMode      m_mode;
     uint8_t       m_powerPercent;
@@ -73,15 +74,21 @@ private:
     float         m_frequency;
     
     DisplayScreen m_currentScreen;
-    uint8_t       m_currentSubScreen;     // 0 = 1.0, 1 = 1.1, 2 = 1.2, 3 = 1.3
-    uint8_t       m_currentServiceScreen; // Zakres 2 - 7
+    uint8_t       m_currentSubScreen;     
+    uint8_t       m_currentServiceScreen; 
 
     uint16_t      m_menuMaxPower;
     uint16_t      m_menuPowerStep;
 
     bool          m_refreshRequired;
     uint32_t      m_lastRefreshTime;
-    bool          m_splashScreenRendered; // Flaga jednorazowego renderu splash
+    bool          m_splashScreenRendered; 
+
+    // =========================================================================
+    // NOWOŚĆ: Prywatne zmienne przechowujące ostatnio zmierzone wartości
+    // =========================================================================
+    uint32_t      m_diagZc;       // Przejścia przez zero / sekundę
+    uint32_t      m_diagTriggers; // Wyzwolenia triaka / sekundę
 };
 
 #endif // DISPLAY_MANAGER_H
