@@ -14,8 +14,9 @@ DisplayManager::DisplayManager()
       m_refreshRequired(true),
       m_lastRefreshTime(0),
       m_splashScreenRendered(false),
-      m_diagZc(0),          // Inicjalizacja nowych zmiennych
-      m_diagTriggers(0)     // Inicjalizacja nowych zmiennych
+      m_diagZc(0),
+      m_diagTriggers(0),
+      m_smoothedLatency(0.0f) // Inicjalizacja wygładzonej latencji
 {
 }
 
@@ -34,8 +35,8 @@ void DisplayManager::update(const ESPNowManager& espNow)
 {
     uint32_t now = millis();
 
-    // Wymuszaj ciągłe odświeżanie dla dynamicznych ekranów diagnostycznych w menu serwisowym
-    if (m_currentScreen == DisplayScreen::SERVICE)
+    // Wymuszaj ciągłe odświeżanie dla dynamicznych ekranów diagnostycznych w menu serwisowym oraz ekranu debugowania
+    if (m_currentScreen == DisplayScreen::SERVICE || (m_currentScreen == DisplayScreen::MAIN && m_currentSubScreen == 4))
     {
         m_refreshRequired = true;
     }
@@ -100,7 +101,6 @@ void DisplayManager::setMenuPowerStep(uint16_t step) { if (m_menuPowerStep != st
 
 void DisplayManager::forceRefresh() { m_refreshRequired = true; m_lastRefreshTime = 0; }
 
-// Metoda wywoływana jednorazowo podczas startu
 void DisplayManager::showSplashScreen()
 {
     if (!m_splashScreenRendered)
@@ -114,15 +114,26 @@ void DisplayManager::showSplashScreen()
     }
 }
 
-// Metoda aktualizująca statystyki diagnostyczne z poziomu pętli loop()
-void DisplayManager::updateDiagnostics(uint32_t zc, uint32_t triggers)
+// =========================================================================
+// ZMODYFIKOWANA METODA DIAGNOSTYCZNA (Filtr EMA dla latencji)
+// =========================================================================
+void DisplayManager::updateDiagnostics(uint32_t zc, uint32_t triggers, uint32_t lastPacketTime)
 {
-    if (m_diagZc != zc || m_diagTriggers != triggers)
-    {
-        m_diagZc = zc;
-        m_diagTriggers = triggers;
-        m_refreshRequired = true;
+    m_diagZc = zc;
+    m_diagTriggers = triggers;
+
+    // Obliczamy aktualne, surowe opóźnienie w sekundach
+    float rawLatency = (millis() - lastPacketTime) / 1000.0f;
+    if (rawLatency < 0.0f) rawLatency = 0.0f;
+
+    // Filtr dolnoprzepustowy (EMA) - idealny wygładzacz dla LCD
+    if (m_smoothedLatency <= 0.001f) {
+        m_smoothedLatency = rawLatency; // Inicjalizacja przy pierwszym poprawnym przebiegu
+    } else {
+        m_smoothedLatency = (rawLatency * 0.12f) + (m_smoothedLatency * 0.88f); // 12% nowy, 88% stary pomiar
     }
+
+    m_refreshRequired = true;
 }
 
 void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
@@ -139,6 +150,7 @@ void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
                 case 1: drawPvPowerScreen(espNow); break;    // Ekran 1.1
                 case 2: drawInverterScreen(espNow); break;   // Ekran 1.2
                 case 3: drawBatteryScreen(espNow); break;    // Ekran 1.3
+                case 4: drawDebugScreen(espNow); break;      // Ekran 1.4 (NOWY!)
             }
             break;
 
@@ -157,7 +169,7 @@ void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
 }
 
 // =========================================================================
-// GRUPA 1: RENDERY EKRANÓW PRACY (Triak aktywny, timeout 30s)
+// GRUPA 1: RENDERY EKRANÓW PRACY
 // =========================================================================
 
 void DisplayManager::drawMainScreen(const ESPNowManager& espNow)
@@ -189,12 +201,19 @@ void DisplayManager::drawPvPowerScreen(const ESPNowManager& espNow)
     m_lcd.printf("MOC PV: %5uW", espNow.getPVPower());
 }
 
+// ZMODYFIKOWANY Ekran 1.2: DOM FAL oraz BILANS
 void DisplayManager::drawInverterScreen(const ESPNowManager& espNow)
 {
+    // Wyliczenie uproszczonego poboru domu na podstawie danych inwertera i baterii
+    int32_t domPower = (int32_t)espNow.getInverterPower() - espNow.getBatteryPower();
+    if (domPower < 0) domPower = 0;
+
+    int32_t bilans = (int32_t)espNow.getPVPower() - espNow.getInverterPower();
+
     m_lcd.setCursor(0, 0);
-    m_lcd.print("INFO: INWERTER  ");
+    m_lcd.printf("DOM FAL:   %5dW", domPower);
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("DOM/INV:%5uW", espNow.getInverterPower());
+    m_lcd.printf("BILANS:   %+5dW", bilans);
 }
 
 void DisplayManager::drawBatteryScreen(const ESPNowManager& espNow)
@@ -206,7 +225,7 @@ void DisplayManager::drawBatteryScreen(const ESPNowManager& espNow)
     int32_t batPower = espNow.getBatteryPower();
     if (batPower <= 0)
     {
-        m_lcd.printf("BAT: LAD. %4dW", batPower);
+        m_lcd.printf("BAT: LAD. %4dW", -batPower); // Wypisujemy wartość dodatnią przy ładowaniu
     }
     else
     {
@@ -215,7 +234,21 @@ void DisplayManager::drawBatteryScreen(const ESPNowManager& espNow)
 }
 
 // =========================================================================
-// GRUPA 2: RENDERY MENU SERWISOWEGO (Grzałka wyłączona!)
+// NOWOŚĆ: Ekran 1.4: LIVE DEBUG (Diagnostyka całego linku w czasie pracy)
+// =========================================================================
+void DisplayManager::drawDebugScreen(const ESPNowManager& espNow)
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.printf("ZC:%-3u      TR:%-3u", m_diagZc, m_diagTriggers);
+    
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("RAD:%-2s   LAT:%.2fs", 
+                 espNow.isConnected() ? "OK" : "NC", 
+                 m_smoothedLatency);
+}
+
+// =========================================================================
+// GRUPA 2: RENDERY MENU SERWISOWEGO
 // =========================================================================
 
 void DisplayManager::drawZeroCrossScreen()
@@ -225,7 +258,6 @@ void DisplayManager::drawZeroCrossScreen()
     m_lcd.print(m_frequency > 45.0f ? "OK" : "ERR");
 
     m_lcd.setCursor(0, 1);
-    // Wyświetlanie PRAWDZIWYCH impulsów przejścia przez zero na sekundę (m_diagZc) zamiast sztywnych 100/0
     m_lcd.printf("ZC/s:%3u F:%4.1fH", m_diagZc, m_frequency);
 }
 
@@ -236,7 +268,6 @@ void DisplayManager::drawPhaseManagerScreen()
     m_lcd.print(m_diagTriggers > 0 ? "ACT" : "OFF");
     
     m_lcd.setCursor(0, 1);
-    // Wyświetlanie PRAWDZIWYCH wyzwoleń triaka na sekundę zliczonych przez Core 1
     m_lcd.printf("Trig/s: %3u/100", m_diagTriggers);
 }
 

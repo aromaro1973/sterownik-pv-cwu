@@ -46,9 +46,9 @@ public:
     void showSplashScreen(); 
 
     // =========================================================================
-    // NOWOŚĆ: Metoda do aktualizacji liczników diagnostycznych z poziomu main.cpp
+    // Zaktualizowana Metoda diagnostyczna (przyjmuje teraz czas ostatniego pakietu)
     // =========================================================================
-    void updateDiagnostics(uint32_t zc, uint32_t triggers);
+    void updateDiagnostics(uint32_t zc, uint32_t triggers, uint32_t lastPacketTime);
 
 private:
     void refreshDisplay(const ESPNowManager& espNow);
@@ -57,6 +57,7 @@ private:
     void drawPvPowerScreen(const ESPNowManager& espNow); 
     void drawInverterScreen(const ESPNowManager& espNow); 
     void drawBatteryScreen(const ESPNowManager& espNow); 
+    void drawDebugScreen(const ESPNowManager& espNow); // <-- NOWOŚĆ: Ekran 1.4 Live Debug
 
     void drawZeroCrossScreen(); 
     void drawPhaseManagerScreen(); 
@@ -84,11 +85,10 @@ private:
     uint32_t      m_lastRefreshTime;
     bool          m_splashScreenRendered; 
 
-    // =========================================================================
-    // NOWOŚĆ: Prywatne zmienne przechowujące ostatnio zmierzone wartości
-    // =========================================================================
+    // Statystyki diagnostyczne (Nowy Ekran 1.4)
     uint32_t      m_diagZc;       // Przejścia przez zero / sekundę
     uint32_t      m_diagTriggers; // Wyzwolenia triaka / sekundę
+    float         m_smoothedLatency; // Uśredniona latencja ESP-NOW (EMA)
 };
 
 #endif // DISPLAY_MANAGER_H

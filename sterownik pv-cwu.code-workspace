@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "sterownik pv-cwu",
+			"path": "."
+		},
+		{
+			"name": "nadajnik ESPNow",
+			"path": "../Nadajnik_PV_ESPNow/nadajnik ESPNow"
+		}
+	],
+	"settings": {}
+}

@@ -26,17 +26,17 @@ ESPNowManager espNowManager;
 AutoController autoController;
 
 //==================================================
-// Nowe Definicje Ekranów i Stanów Systemu (Zgodnie z Założeniami)
+// Definicje Ekranów i Stanów Systemu
 //==================================================
 enum class SystemState {
     SPLASH_SCREEN,      // Ekran startowy (3 sekundy, wymuszony OFF)
-    GROUP_1_WORK,       // Grupa 1: Ekrany pracy (1.0, 1.1, 1.2, 1.3)
+    GROUP_1_WORK,       // Grupa 1: Ekrany pracy (1.0, 1.1, 1.2, 1.3, 1.4)
     GROUP_2_SERVICE     // Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 do 7)
 };
 
 // Zmienne stanów
 SystemState currentSystemState = SystemState::SPLASH_SCREEN;
-uint8_t currentSubScreen = 0; // Dla Grupy 1: 0 = Główny 1.0, 1 = PV 1.1, 2 = Dom 1.2, 3 = Bat 1.3
+uint8_t currentSubScreen = 0; // Dla Grupy 1: 0 = Główny, 1 = PV, 2 = Dom, 3 = Bat, 4 = Live Debug
 uint8_t currentServiceScreen = 2; // Dla Grupy 2: Ekrany diagnostyki od 2 do 7
 
 //==================================================
@@ -75,13 +75,15 @@ void setup() {
 
     // 5. Inicjalizacja układów wykonawczych i peryferiów
     zeroCross.begin();   
+    phaseController.begin(PIN_TRIAC); // Inicjalizacja pinu triaka i sprzętowego timera
+    
     displayManager.begin();
     controlPanel.begin();
     
     // 6. Inicjalizacja strażnika przeciążeniowego
     guardian.begin(2000); 
 
-    // 7. BEZPIECZNY START (Założenie 1)
+    // 7. BEZPIECZNY START
     // Sterownik zawsze startuje w trybie OFF i z mocą 0%.
     controlPanel.setMode(WorkMode::OFF);
     controlPanel.setManualPower(0);
@@ -110,7 +112,7 @@ void loop()
 
     // Odczyt impulsów kliknięć z panelu sterowania
     bool modeClicked  = controlPanel.wasModePressed();      // Krótki klik MODE
-    bool modeHeld     = controlPanel.wasModeLongPressed();  // Długi klik MODE (np. wejście/wyjście z serwisu - 2s)
+    bool modeHeld     = controlPanel.wasModeLongPressed();  // Długi klik MODE (wejście/wyjście z serwisu)
     bool plusClicked  = controlPanel.wasPlusPressed();
     bool minusClicked = controlPanel.wasMinusPressed();
 
@@ -128,13 +130,24 @@ void loop()
         lastDataChangeTime = millis();
     }
 
+    // Sprawdzenie odbioru pakietu ESP-NOW (niezależnie od trybu, aby zasilić czas latencji)
+    if (espNowManager.isConnected())
+    {
+        lastEspNowPacketTime = millis();
+        if (espNowManager.getPVPower() != lastPVPower)
+        {
+            lastPVPower = espNowManager.getPVPower();
+            lastDataChangeTime = millis(); // Rejestracja zmiany telemetrycznej
+        }
+    }
+
     // =========================================================================
     // Nadrzędna Maszyna Stanów Sterownika EMS
     // =========================================================================
     switch (currentSystemState)
     {
         // ---------------------------------------------------------------------
-        // 1. Ekran Startowy (Splash Screen) - Założenie 1
+        // 1. Ekran Startowy (Splash Screen)
         // ---------------------------------------------------------------------
         case SystemState::SPLASH_SCREEN:
         {
@@ -144,7 +157,7 @@ void loop()
             controlPanel.setMode(mode);
             controlPanel.setManualPower(power);
 
-            // Wyświetl Splash Screen (Obsługiwane w DisplayManager na podstawie flagi/stanu)
+            // Wyświetl Splash Screen
             displayManager.showSplashScreen(); 
 
             // Po upływie 3 sekund przejdź do normalnej pracy
@@ -164,7 +177,7 @@ void loop()
         }
 
         // ---------------------------------------------------------------------
-        // 2. Grupa 1: Ekrany Pracy (Normalne sterowanie) - Założenie 2
+        // 2. Grupa 1: Ekrany Pracy (Normalne sterowanie)
         // ---------------------------------------------------------------------
         case SystemState::GROUP_1_WORK:
         {
@@ -173,7 +186,7 @@ void loop()
                 group1TimeoutTimer = millis();
             }
 
-            // Timeout 30 sekund: Jeśli jesteśmy na podekranie (1.1, 1.2, 1.3) i nic nie klikamy -> wróć do 1.0
+            // Timeout 30 sekund: Jeśli jesteśmy na podekranie (1.1 - 1.4) i nic nie klikamy -> wróć do 1.0
             if (currentSubScreen != 0 && (millis() - group1TimeoutTimer >= 30000))
             {
                 currentSubScreen = 0;
@@ -245,15 +258,15 @@ void loop()
             }
             else
             {
-                // W trybach AUTO / OFF: Przyciski PLUS/MINUS służą do nawigacji po podekranach (1.1, 1.2, 1.3)
+                // W trybach AUTO / OFF: Przyciski PLUS/MINUS nawigują po 5 podekranach (0 do 4)
                 if (plusClicked)
                 {
-                    currentSubScreen = (currentSubScreen + 1) % 4; // Rotacja: 0 -> 1 -> 2 -> 3 -> 0
+                    currentSubScreen = (currentSubScreen + 1) % 5; // Rotacja: 0 -> 1 -> 2 -> 3 -> 4 -> 0
                     displayManager.forceRefresh();
                 }
                 if (minusClicked)
                 {
-                    currentSubScreen = (currentSubScreen == 0) ? 3 : currentSubScreen - 1; // Rotacja w tył
+                    currentSubScreen = (currentSubScreen == 0) ? 4 : currentSubScreen - 1; // Rotacja w tył
                     displayManager.forceRefresh();
                 }
             }
@@ -261,18 +274,7 @@ void loop()
             // --- Logika Bezpieczeństwa / Algorytm nadwyżek (Tryb AUTO) ---
             if (mode == WorkMode::AUTO)
             {
-                // 1. Sprawdzenie odbioru pakietu ESP-NOW
-                if (espNowManager.isConnected())
-                {
-                    lastEspNowPacketTime = millis();
-                    if (espNowManager.getPVPower() != lastPVPower)
-                    {
-                        lastPVPower = espNowManager.getPVPower();
-                        lastDataChangeTime = millis(); // Rejestracja zmiany telemetrycznej
-                    }
-                }
-
-                // 2. Failsafe 7 sekund (Brak ramek LUB zamrożony odczyt) - Założenie 4
+                // Failsafe 7 sekund (Brak ramek LUB zamrożony odczyt)
                 bool radioTimeout  = (millis() - lastEspNowPacketTime > 7000);
                 bool frozenTimeout = (millis() - lastDataChangeTime > 7000);
 
@@ -311,7 +313,7 @@ void loop()
         }
 
         // ---------------------------------------------------------------------
-        // 3. Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 - 7) - Założenie 3
+        // 3. Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 - 7)
         // ---------------------------------------------------------------------
         case SystemState::GROUP_2_SERVICE:
         {
@@ -381,7 +383,7 @@ void loop()
             {
                 // Regulacja dP (Anty-czajnik / Delta P) co 50W (zakres np. 50W - 3000W)
                 uint16_t currentStep = displayManager.getMenuPowerStep();
-                if (plusClicked && currentStep < 3000)  currentStep += 50;
+                if (plusClicked && currentStep < 3000)   currentStep += 50;
                 if (minusClicked && currentStep >= 50) currentStep -= 50;
                 displayManager.setMenuPowerStep(currentStep);
             }
@@ -396,32 +398,8 @@ void loop()
     // Fizyczny sterownik triaka i synchronizacja wyświetlania
     // =========================================================================
     
-    // Przekazanie aktualnej mocy do PhaseControllera w celu wyznaczenia kąta/opóźnienia
+    // Przekazanie aktualnej mocy do PhaseControllera w celu wyznaczenia kąta/opóźnienia.
     phaseController.setPower(power);
-
-    // Fizyczna obsługa przejścia przez zero i wyzwalania triaka (Zgodnie z detekcją)
-    if (zeroCross.available())
-    {
-        uint32_t delayUs = phaseController.getDelayMicros();
-
-        // Wyzwalamy tylko wtedy, gdy moc jest większa od zera (opóźnienie < 10ms)
-        if (delayUs < 10000)
-        {
-            if (delayUs > 0)
-            {
-                delayMicroseconds(delayUs); // Odczekanie zadanego kąta fazowego
-            }
-
-            // --- FIZYCZNE WYZWOLENIE TRIAKA ---
-            digitalWrite(PIN_TRIAC, HIGH);
-
-            // Zliczamy wyzwolenie do statystyk diagnostycznych
-            Utils::triggerCounter++; 
-
-            delayMicroseconds(10); // Impuls bramki wymagany do zatrzaśnięcia triaka
-            digitalWrite(PIN_TRIAC, LOW);
-        }
-    }
 
     // Blokada bezpieczeństwa Guardiana (Ma charakter nadrzędny w trybie pracy)
     if (currentSystemState == SystemState::GROUP_1_WORK && guardian.isBlocked())
@@ -452,8 +430,8 @@ void loop()
         Utils::zcCounter = 0;
         Utils::triggerCounter = 0;
 
-        // 3. Wysyłamy świeże dane sekundowe na wyświetlacz
-        displayManager.updateDiagnostics(currentZc, currentTriggers);
+        // 3. Wysyłamy świeże dane sekundowe na wyświetlacz (przekazując czas ostatniej ramki radiowej)
+        displayManager.updateDiagnostics(currentZc, currentTriggers, lastEspNowPacketTime);
 
         // 4. Tworzenie pełnego wpisu logowania
         String logMsg = "State=" + String((int)currentSystemState) +

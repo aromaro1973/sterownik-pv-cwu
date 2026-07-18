@@ -3,46 +3,22 @@
 
 #include <Arduino.h>
 
-class ZeroCross
-{
+class ZeroCross {
 public:
-
-    // Inicjalizacja modułu
     void begin();
-
-    // Aktualizacja modułu (wywoływana w loop)
     void update();
-
-    // Czy pojawił się nowy półokres?
     bool available();
+    float getFrequency();
 
-    // Liczba półokresów z ostatniej sekundy
-    uint32_t getHalfCycles() const;
-
-    // Całkowity licznik półokresów
-    uint32_t getTotalCounter() const;
-
-    // Aktualna częstotliwość sieci
-    float getFrequency() const;
-
-    // Czy sygnał jest obecny
-    bool isSignalPresent() const;
-
-private:
-
+    // Metoda przerwania musi być statyczna i umieszczona w pamięci IRAM dla szybkości
     static void IRAM_ATTR isr();
 
-    static volatile bool pulseDetected;
-    static volatile uint32_t pulseCounter;
-    static volatile uint32_t lastPulseMicros;
-
-    uint32_t previousCounter = 0;
-    uint32_t halfCycles = 0;
-
-    uint32_t lastSecond = 0;
-
-    float frequency = 0.0f;
-    bool signalPresent = false;
+private:
+    static volatile bool _zeroCrossed;
+    static volatile uint32_t _pulseCount;
+    static volatile uint32_t _lastPulseMicros; // <-- DODANE DO FILTRACJI
+    static uint32_t _lastPulseTime;
+    static float _frequency;
 };
 
 #endif

@@ -4,8 +4,6 @@ Wersja dokumentu: 1.0
 
 Autor projektu: Arkadiusz Marek
 
-Główny Architekt AI / Współtwórca: Gemini (Sztuczna Inteligencja)
-
 1. Założenia Projektowe i Koncepcja Systemu
 Głównym celem systemu EMS (Energy Management System) jest bezprzewodowy odbiór danych telemetrycznych z falownika off-grid oraz precyzyjne, płynne przekierowanie nadwyżek energii elektrycznej z paneli fotowoltaicznych (PV) bezpośrednio do obciążenia rezystancyjnego (grzałka CWU o mocy nominalnej 2000 W).
 
