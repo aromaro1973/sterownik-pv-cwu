@@ -20,7 +20,7 @@ void PhaseController::begin(uint8_t triacPin) {
 
 // Wywoływane natychmiast przy wykryciu zera (w przerwaniu ZeroCross::isr)
 void IRAM_ATTR PhaseController::trigger() {
-    // Gasimy bramkę triaka z poprzedniego cyklu
+    // Zabezpieczenie: na początku cyklu upewniamy się, że pin jest wyłączony
     digitalWrite(_triacPin, LOW);
 
     uint32_t delayVal = _delayMicros;
@@ -31,7 +31,7 @@ void IRAM_ATTR PhaseController::trigger() {
     }
 
     if (delayVal <= 50) {
-        // Moc 100% - odpalamy triak od razu
+        // Moc 100% - odpalamy triak od razu i trzymamy stan wysoki
         digitalWrite(_triacPin, HIGH);
         Utils::triggerCounter++;
         return;
@@ -44,7 +44,11 @@ void IRAM_ATTR PhaseController::trigger() {
 
 // Wywoływane automatycznie przez sprzęt po odliczeniu delayVal mikrosekund
 void IRAM_ATTR PhaseController::onTimerFire(void* arg) {
+    // Generujemy precyzyjny impuls szpilkowy o długości 200 mikrosekund
     digitalWrite(_triacPin, HIGH);
+    delayMicroseconds(200); 
+    digitalWrite(_triacPin, LOW);
+    
     Utils::triggerCounter++;
 }
 
@@ -53,15 +57,19 @@ void PhaseController::setPower(int percent) {
         _delayMicros = 10000;
         return;
     }
-    if (percent > 40 && percent < 95) {
-        percent = 40; // Twoje sztywne cięcie dla falownika
+    
+    // Nowe sztywne cięcie – blokujemy moc powyżej 47%, dopóki nie osiągnie 95%
+    if (percent > 47 && percent < 95) {
+        percent = 47; 
     }
+    
     if (percent >= 95) {
         _delayMicros = 0;
         return;
     }
-    // Mapowanie bezpiecznego zakresu na mikrosekundy (od 9.5 ms do 6.5 ms opóźnienia)
-    _delayMicros = map(percent, 0, 40, 9500, 6500); 
+    
+    // Mapowanie zakresu 0-47% na mikrosekundy (9100 us to minimum, 5500 us to maksimum mocy na zboczu opadającym)
+    _delayMicros = map(percent, 0, 47, 9100, 5500); 
 }
 
 uint32_t PhaseController::getDelayMicros() {

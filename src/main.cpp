@@ -124,22 +124,26 @@ void loop()
     uint8_t power = controlPanel.getManualPower();
 
     // --- Diagnostyka zamrożonych danych ---
-    static int16_t lastPVPower = -1;
-    static uint32_t lastDataChangeTime = 0;
-    if (lastDataChangeTime == 0) {
-        lastDataChangeTime = millis();
-    }
+    // --- Diagnostyka zamrożonych danych ---
+static uint32_t lastPacketCount = 0;
+static uint32_t lastDataChangeTime = 0;
+if (lastDataChangeTime == 0) {
+    lastDataChangeTime = millis();
+}
 
-    // Sprawdzenie odbioru pakietu ESP-NOW (niezależnie od trybu, aby zasilić czas latencji)
-    if (espNowManager.isConnected())
+// Sprawdzenie odbioru pakietu ESP-NOW i detekcja zamrożenia
+if (espNowManager.isConnected())
+{
+    lastEspNowPacketTime = millis();
+    
+    // ZMIANA: Sprawdzamy, czy licznik odebranych pakietów się zwiększył.
+    // Dzięki temu, nawet jeśli w nocy PV wynosi ciągle 0, system wie, że dane napływają na bieżąco!
+    if (espNowManager.getPacketCounter() != lastPacketCount)
     {
-        lastEspNowPacketTime = millis();
-        if (espNowManager.getPVPower() != lastPVPower)
-        {
-            lastPVPower = espNowManager.getPVPower();
-            lastDataChangeTime = millis(); // Rejestracja zmiany telemetrycznej
-        }
+        lastPacketCount = espNowManager.getPacketCounter();
+        lastDataChangeTime = millis(); // Rejestracja odebrania świeżej ramki danych
     }
+}
 
     // =========================================================================
     // Nadrzędna Maszyna Stanów Sterownika EMS
@@ -237,21 +241,25 @@ void loop()
             if (mode == WorkMode::MANUAL)
             {
                 // W trybie MANUAL: Podekrany są zablokowane. Przyciski bezpośrednio zmieniają moc
-                // Regulacja o 10% w zakresie 0% - 40% LUB bezpośredni skok na 100%
+                // Regulacja o 10% w zakresie 0% - 40%, potem precyzyjnie co 1% do 47%, a potem skok na 100%
                 if (plusClicked)
                 {
                     if (power < 40) {
-                        power += 10;
-                    } else if (power == 40) {
-                        power = 100; // Skok bezpośredni na 100%
+                        power += 10;        // Standardowy skok: 0 -> 10 -> 20 -> 30 -> 40
+                    } else if (power >= 40 && power < 47) {
+                        power += 1;         // Precyzyjna regulacja co 1%: 40 -> 41 -> 42 -> ... -> 47
+                    } else if (power == 47) {
+                        power = 100;        // Skok bezpośredni z 47% na pełne 100%
                     }
                 }
                 if (minusClicked)
                 {
                     if (power == 100) {
-                        power = 40;  // Powrót ze 100% na 40%
+                        power = 47;         // Powrót ze 100% na maksymalne 47%
+                    } else if (power > 40 && power <= 47) {
+                        power -= 1;         // Precyzyjne schodzenie co 1%: 47 -> 46 -> 45 -> ... -> 40
                     } else if (power >= 10) {
-                        power -= 10;
+                        power -= 10;        // Powrót do standardowych kroków: 40 -> 30 -> 20 -> 10 -> 0
                     }
                 }
                 controlPanel.setManualPower(power);
