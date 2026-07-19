@@ -2,11 +2,16 @@
 #include "ZeroCross.h"
 #include "PhaseController.h" 
 #include <Utils.h>           
+#include <Guardian.h>
+
+// Referencja do globalnej instancji Guardiana zadeklarowanej w main.cpp
+// Dzięki temu mamy do niej błyskawiczny dostęp wewnątrz przerwania
+extern Guardian guardian;
 
 // Definicje zmiennych statycznych
 volatile bool ZeroCross::_zeroCrossed = false;
 volatile uint32_t ZeroCross::_pulseCount = 0;
-volatile uint32_t ZeroCross::_lastPulseMicros = 0; // <-- Inicjalizacja nowej zmiennej
+volatile uint32_t ZeroCross::_lastPulseMicros = 0; 
 uint32_t ZeroCross::_lastPulseTime = 0;
 float ZeroCross::_frequency = 0.0f;
 
@@ -16,7 +21,7 @@ void ZeroCross::begin() {
     _lastPulseTime = millis();
 }
 
-// BŁYSKAWICZNA FUNKCJA PRZERWANIA Z FILTREM ZAKŁÓCEŃ
+// BŁYSKAWICZNA FUNKCJA PRZERWANIA Z FILTREM ZAKŁÓCEŃ I STRAŻNIKIEM
 void IRAM_ATTR ZeroCross::isr() {
     uint32_t now = micros();
 
@@ -28,11 +33,20 @@ void IRAM_ATTR ZeroCross::isr() {
     }
     _lastPulseMicros = now;
 
+    // =========================================================================
+    // NOWOŚĆ: ULTRASZYBKA REAKCJA GUARDIANA (Bezpieczeństwo sprzętowe)
+    // =========================================================================
+    // Jeśli Guardian zarejestrował blokadę awaryjną (np. w pętli lub przy odbiorze ESP-NOW),
+    // natychmiast przerywamy wykonanie i NIE odpalamy triaka w tej połówce fali.
+    if (guardian.isBlocked()) {
+        return; 
+    }
+
     _zeroCrossed = true;
     _pulseCount++;
     Utils::zcCounter++; 
 
-    // Natychmiast informujemy PhaseController o realnym przejściu przez zero
+    // Jeśli wszystko jest bezpieczne, informujemy PhaseController o realnym przejściu przez zero
     PhaseController::trigger(); 
 }
 

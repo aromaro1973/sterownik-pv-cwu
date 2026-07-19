@@ -5,45 +5,37 @@
 
 /**
  * @class AutoController
- * @brief Moduł automatycznego śledzenia nadwyżek energii dla systemu Off-Grid.
- * * Implementuje hybrydowy algorytm regulacji krokowej (co 500ms):
- * - Płynna regulacja fazowa w bezpiecznym zakresie: 0% - 40%
- * - Strefa martwa (blokada generowania wyższych harmonicznych): 41% - 99%
- * - Przełączenie skokowe na pełną falę (czysta sinusoida): 100%
+ * @brief Moduł automatycznego śledzenia nadwyżek i zarządzania mocą grzałki.
+ * 
+ * Realizuje dwustopniową kontrolę:
+ * 1. Wyznacza 15% strefy bezpieczeństwa od progu Guardiana i porównuje z mocą falownika.
+ * 2. Weryfikuje bilans baterii w celu płynnego doregulowania lub zrzutu mocy przy chmurach.
  */
 class AutoController
 {
 public:
     AutoController();
-
-    /**
-     * @brief Inicjalizacja kontrolera automatycznego
-     * @param nominalHeaterPower Moc znamionowa podłączonej grzałki w Watach (np. 2000W)
-     */
     void begin(uint16_t nominalHeaterPower);
-
+    
     /**
      * @brief Główny algorytm EMS wyliczający optymalne wysterowanie grzałki
      * @param powerPV Aktualna generacja z paneli fotowoltaicznych [W]
-     * @param powerInv Sumaryczne obciążenie wyjściowe falownika AC [W]
+     * @param powerInv Aktualna moc obciążenia falownika [W]
      * @param powerBat Bilans mocy akumulatora [W] (dodatnia = rozładowanie, ujemna = ładowanie)
-     * @param maxBatDischargeW Dopuszczalny próg rozładowania akumulatora na cele grzewcze (np. 400W)
-     * @param guardianBlocked Flaga wymuszenia twardego odcięcia przez moduł Guardian
-     * @return Rzeczywisty, bezpieczny procent wysterowania dla PhaseController (0-40 lub 100)
+     * @param maxBatDischargeW Maksymalne dopuszczalne rozładowanie baterii na cele grzałki [W]
+     * @param guardianBlocked Flaga twardego odcięcia wygenerowana przez Guardian
+     * @param guardianMaxPower Ustawiony w Guardianie limit mocy falownika [W]
      */
     uint8_t calculateOffGridPower(int32_t powerPV, int32_t powerInv, int32_t powerBat, 
-                                  int32_t maxBatDischargeW, bool guardianBlocked);
+                                  int32_t maxBatDischargeW, bool guardianBlocked, uint16_t guardianMaxPower);
 
-    /**
-     * @brief Pełny reset maszyny stanów algorytmu (powrót do procedury szybkiego startu)
-     */
     void reset();
 
 private:
-    uint16_t m_heaterPowerW;        ///< Zapamiętana moc znamionowa grzałki [W]
-    uint8_t  m_currentPowerPercent; ///< Bieżący wyliczony stopień wysterowania (0-40% lub 100%)
-    uint32_t m_lastRegTime;         ///< Znacznik czasu [ms] ostatniego wykonanego kroku regulacji
-    bool     m_inSoftStart;         ///< Flaga aktywnej procedury szybkiego startu (Pre-positioning)
+    uint16_t m_heaterPowerW; 
+    uint8_t  m_currentPowerPercent; 
+    uint32_t m_lastRegTime; 
+    bool     m_inSoftStart; 
 };
 
 #endif // AUTO_CONTROLLER_H

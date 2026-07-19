@@ -2,44 +2,45 @@
 #define GUARDIAN_H
 
 #include <Arduino.h>
+#include <Preferences.h>
 
-enum class GuardianBlockReason
-{
-    NONE,
-    MAX_POWER,
-    POWER_STEP
+enum class BlockReason {
+    NONE = 0,
+    OVERLOAD = 1,
+    NO_ZERO_CROSS = 2,
+    HARDWARE_FAULT = 3
 };
 
 class Guardian
 {
 public:
-    // Inicjalizacja modułu - warto podać fizyczną moc grzałki z Config.h
+    Guardian();
+
     void begin(uint16_t nominalHeaterPower);
+    
+    // Szybka aktualizacja wywoływana w krytycznych punktach programu
+    void update(int32_t currentInverterPowerW, uint8_t currentTriacPercent);
 
-    // Aktualizacja modułu w loop()
-    void update();
+    bool isBlocked() const;
+    BlockReason getBlockReason() const;
+    void resetBlock();
 
-    // Parametry użytkownika (w Watach)
-    void setMaxPower(uint16_t power);
+    void setMaxPower(uint16_t maxPower);
     uint16_t getMaxPower() const;
 
     void setPowerStep(uint16_t step);
     uint16_t getPowerStep() const;
 
-    // Stan modułu
-    bool isBlocked() const;
-    GuardianBlockReason getBlockReason() const;
-    
-    // NOWOŚĆ: Szybka konwersja powodu blokady na tekst dla Loggera/LCD
-    const char* blockReasonToString() const;
+    // Funkcje obsługi pamięci nieulotnej flash (NVS)
+    void saveSettings();
+    void loadSettings();
 
 private:
-    uint16_t heaterMaxPower = 2000; // Fizyczna moc grzałki, np. 2000W
-    uint16_t maxPower = 3500;       // Maksymalna dozwolona moc w instalacji
-    uint16_t powerStep = 1000;      // Maksymalny skok mocy (ochrona przed udarami)
-
-    bool blocked = false;
-    GuardianBlockReason blockReason = GuardianBlockReason::NONE;
+    bool m_isBlocked;
+    BlockReason m_blockReason;
+    uint16_t m_maxInverterPowerW;
+    uint16_t m_powerStep;
+    uint16_t m_nominalHeaterPowerW;
 };
 
 #endif // GUARDIAN_H

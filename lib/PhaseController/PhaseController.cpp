@@ -1,6 +1,7 @@
 #include "PhaseController.h"
 #include <Utils.h> // Wymagane do zliczania Utils::triggerCounter dla diagnostyki
 
+// Inicjalizacja składowych statycznych klasy
 uint8_t PhaseController::_triacPin = 0;
 volatile uint32_t PhaseController::_delayMicros = 10000; 
 esp_timer_handle_t PhaseController::_timerHandle;
@@ -18,9 +19,13 @@ void PhaseController::begin(uint8_t triacPin) {
     esp_timer_create(&timerArgs, &_timerHandle);
 }
 
-// Wywoływane natychmiast przy wykryciu zera (w przerwaniu ZeroCross::isr)
+// Wywoływane bezpośrednio z przerwania w ZeroCross (public)
 void IRAM_ATTR PhaseController::trigger() {
-    // Zabezpieczenie: na początku cyklu upewniamy się, że pin jest wyłączony
+    // 1. Bezwzględne zatrzymanie stopera z poprzedniej półfali.
+    // Zapobiega to nakładaniu się przerwaniami przy szumach na linii zasilania.
+    esp_timer_stop(_timerHandle);
+    
+    // Upewniamy się, że zdejmujemy stan wysoki z bramki triaka
     digitalWrite(_triacPin, LOW);
 
     uint32_t delayVal = _delayMicros;
@@ -30,23 +35,28 @@ void IRAM_ATTR PhaseController::trigger() {
         return;
     }
 
-    if (delayVal <= 50) {
-        // Moc 100% - odpalamy triak od razu i trzymamy stan wysoki
+    if (delayVal == 0) {
+        // Moc 100% - odpalamy triak od razu i trzymamy stan wysoki przez całą półfalę
         digitalWrite(_triacPin, HIGH);
         Utils::triggerCounter++;
         return;
     }
 
-    // Odliczanie czasu opóźnienia do zapłonu triaka
-    esp_timer_stop(_timerHandle);
+    // 2. Odliczanie czasu opóźnienia do zapłonu triaka (sterowanie fazowe)
     esp_timer_start_once(_timerHandle, delayVal);
 }
 
-// Wywoływane automatycznie przez sprzęt po odliczeniu delayVal mikrosekund
+// Metoda prywatna (private), wywoływana automatycznie przez sprzęt po odliczeniu delayVal
 void IRAM_ATTR PhaseController::onTimerFire(void* arg) {
-    // Generujemy precyzyjny impuls szpilkowy o długości 200 mikrosekund
+    // 3. Włączamy bramkę triaka
     digitalWrite(_triacPin, HIGH);
-    delayMicroseconds(200); 
+    
+    // 4. Generujemy stabilny impuls szpilkowy o długości 50 mikrosekund.
+    // Pozwala to na pewne otworzenie się struktury triaka.
+    ets_delay_us(50); 
+    
+    // 5. Wyłączamy prąd bramki. Zgodnie z fizyką półprzewodników, 
+    // triak będzie przewodził sam, dopóki prąd nie spadnie do zera (koniec półfali).
     digitalWrite(_triacPin, LOW);
     
     Utils::triggerCounter++;
@@ -58,17 +68,18 @@ void PhaseController::setPower(int percent) {
         return;
     }
     
-    // Nowe sztywne cięcie – blokujemy moc powyżej 47%, dopóki nie osiągnie 95%
-    if (percent > 47 && percent < 95) {
+    // Sztywne cięcie – blokujemy moc w strefie martwej, dopóki nie osiągnie pełnych 100%
+    if (percent > 47 && percent < 100) {
         percent = 47; 
     }
     
-    if (percent >= 95) {
-        _delayMicros = 0;
+    if (percent >= 100) {
+        _delayMicros = 0; // Wartość 0 odpali triak natychmiast w funkcji trigger()
         return;
     }
     
-    // Mapowanie zakresu 0-47% na mikrosekundy (9100 us to minimum, 5500 us to maksimum mocy na zboczu opadającym)
+    // Mapowanie zakresu 0-47% na mikrosekundy 
+    // (9100 us to minimum, 5500 us to maksimum mocy na zboczu opadającym)
     _delayMicros = map(percent, 0, 47, 9100, 5500); 
 }
 
