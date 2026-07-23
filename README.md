@@ -1,106 +1,111 @@
-DOKUMENTACJA TECHNICZNA PROJEKTU
-SYSTEM ZARZĄDZANIA ENERGIĄ (EMS): STEROWNIK NADWYŻKI PV (OFF-GRID)
-Wersja dokumentu: 1.0
+# Sterownik PV-CWU / EMS Off-Grid
 
-Autor projektu: Arkadiusz Marek
+Documentation of the current off-grid energy management firmware for a resistive hot-water heater controller.
 
-1. Założenia Projektowe i Koncepcja Systemu
-Głównym celem systemu EMS (Energy Management System) jest bezprzewodowy odbiór danych telemetrycznych z falownika off-grid oraz precyzyjne, płynne przekierowanie nadwyżek energii elektrycznej z paneli fotowoltaicznych (PV) bezpośrednio do obciążenia rezystancyjnego (grzałka CWU o mocy nominalnej 2000 W).
+## 1. Project goal
 
-Główne cele konstrukcyjne:
-Bezpieczny Start (Failsafe Start): Sterownik po włączeniu zasilania lub restarcie zawsze inicjalizuje się w trybie bezpiecznym (WorkMode::OFF) oraz z mocą grzałki ustawioną na 0%.
+The system receives telemetry from an off-grid inverter and safely directs surplus photovoltaic energy to the heater load while maintaining battery safety and inverter stability.
 
-Precyzyjne i Bezpieczne Sterowanie Triakiem: Zaimplementowanie sterowania fazowego z programowo i sprzętowo wydzielonym "pasmem zabronionym" (41%−94%), chroniącym falownik off-grid przed generowaniem szkodliwych harmonicznych i destabilizacją pracy stopnia wyjściowego.
+The current logic is intentionally off-grid oriented:
+- heating is driven by inverter and battery telemetry,
+- PV power is treated as diagnostic input rather than the main control signal,
+- the system keeps a smooth ramp-up and only allows full power when the safety conditions are satisfied.
 
-Zaawansowana Diagnostyka i Watchdog Komunikacyjny: Wykrywanie przerw w transmisji radiowej ESP-NOW oraz blokowanie pracy przy wykryciu "zamrożenia" (braku zmian) danych telemetrycznych.
+## 2. Current operating logic
 
-Wielordzeniowość (Multi-core) i Optymalizacja RAM: Odciążenie głównego rdzenia ESP32 poprzez obsługę zdarzeń krytycznych czasowo (Zero-Cross, wyzwalanie triaka) przy użyciu przerwań sprzętowych (IRAM_ATTR) oraz optymalizacja zużycia sterty (brak dynamicznych alokacji ciągów znakowych dzięki __FlashStringHelper i const char*).
+### 2.1. Power rule
 
-2. Architektura i Zależności Modułowe
-System EMS opiera się na architekturze modułowej. Poniższy diagram przedstawia przepływ danych, zdarzeń i sygnałów sterujących pomiędzy poszczególnymi klasami oprogramowania:
+The present control law is:
+- 0-47%: smooth power regulation,
+- threshold at 47%: the system stops the smooth ramp and waits for surplus conditions,
+- 100%: full power is only enabled when the controller confirms a safe surplus and the protection constraints allow it.
 
-                  +-----------------------+
-                  |  Odbiornik ESP-NOW   | <--- (Komunikacja Radiowa)
-                  |    (ESPNowManager)    |
-                  +-----------+-----------+
-                              |
-                              | Dane telemetryczne (InverterPacket - 10B)
-                              v
-                  +-----------------------+      Weryfikacja
-                  |     Pętla EMS         | <====================> +-----------------+
-                  |      (Main /          |     Stan blokady       |    Guardian     |
-                  |   AutoController)     |                        | (Zabezpieczenia)|
-                  +-----------+-----------+                        +-----------------+
-                              |
-                              | Żądana moc [%]
-                              v
-                  +-----------------------+
-                  |    PhaseController    |
-                  | (Przeliczanie kata    |
-                  |   otwarcia triaka)    |
-                  +-----------+-----------+
-                              |
-                              | Opóźnienie czasowe [us]
-                              v
-+------------------+      Taktowanie     +-----------------------+      Sygnał        +---------------+
-| Detektor Zera AC | ==================> |      ZeroCross        | =================> | Fizyczny Pin  |
-|  (PIN_ZERO_CROSS)|                     | (Obsługa przerwania)  |  Wyzwalający       |  (PIN_TRIAC)  |
-+------------------+                     +-----------------------+                    +---------------+
-                                                     ||
-                                                     || Rejestracja statystyk (zcCounter, triggerCounter)
-                                                     v
-                                         +-----------------------+
-                                         |    Utils / Logger     |
-                                         |    (Narzędzia)        |
-                                         +-----------------------+
-3. Przegląd i Specyfikacja Modułów
-3.1. main.cpp (Nadrzędny Koordynator)
-Rola: Integruje wszystkie peryferia, realizuje główną maszynę stanów interfejsu użytkownika (Splash Screen → Ekrany Pracy → Menu Serwisowe), synchronizuje odczyty wejść z fizycznym wysterowaniem triaka w oparciu o detekcję przejść przez zero.
+This preserves a soft start and prevents an abrupt jump from low power to full power.
 
-Główne zabezpieczenie: Blokuje i zeruje moc grzałki w trybie Menu Serwisowego. Wykrywa zamrożenie danych telemetrycznych oraz brak zasięgu radiowego, wykonując natychmiastowy, awaryjny zrzut do bezpiecznego trybu manualnego o mocy 0%.
+### 2.2. Automatic mode
 
-3.2. ZeroCross
-Rola: Detektor przejścia napięcia sieci przez zero.
+In AUTO mode the controller uses:
+- inverter power,
+- battery power balance,
+- the configurable battery discharge limit stored by Guardian,
+- the safety block state managed by Guardian.
 
-Mechanika: Rejestruje przerwania sprzętowe na pinie PIN_ZERO_CROSS z filtrem zakłóceń (5 ms). Oblicza w czasie rzeczywistym częstotliwość sieci [Hz] oraz czasowo weryfikuje obecność napięcia zmiennego (Hardware Watchdog).
+In MANUAL mode the heater power is controlled directly by the user.
 
-3.3. PhaseController
-Rola: Sterownik kąta otwarcia triaka.
+## 3. Module architecture
 
-Mechanika: Dokonuje konwersji żądanej mocy (0%−100%) na opóźnienie wyzwolenia bramki triaka w mikrosekundach (μs). Implementuje sprzętowe limity bezpieczeństwa: praca fazowa tylko w zakresie 1%−40%, pasmo zabronione 41%−94%, oraz przejście na pełną sinusoidę przy wartościach ≥95%.
+### 3.1. main.cpp
 
-3.4. ESPNowManager
-Rola: Bezprzewodowy odbiór paczek radiowych z nadajnika.
+Coordinates the complete firmware:
+- initializes all modules,
+- maintains the system state machine,
+- handles service-menu activity,
+- drives the user interface loop.
 
-Mechanika: Odbiera upakowaną strukturę telemetryczną InverterPacket o stałym rozmiarze 10 bajtów. Prowadzi statystyki QoS (Quality of Service) na podstawie analizy monotonicznie rosnącego indeksu ramek packetId, obliczając liczbę utraconych pakietów i jitter (interwał odbioru).
+### 3.2. ZeroCross
 
-3.5. Guardian
-Rola: Bezpiecznik nadrzędny (Software Interlock).
+Detects zero crossing of the AC mains waveform.
 
-Mechanika: Niezależnie nadzoruje limity fizyczne i prądowe. W przypadku naruszenia maksymalnej mocy dopuszczalnej (maxPower) lub przekroczenia maksymalnego przyrostu obciążenia w czasie (powerStep), natychmiastowo aktywuje blokadę, odcinając wysterowanie grzałki.
+It operates as the fast hardware path:
+- uses attachInterrupt(...),
+- filters false zero-cross pulses,
+- provides timing synchronization to the triac driver.
 
-3.6. Utils
-Rola: Narzędzia globalne i liczniki diagnostyczne.
+### 3.3. PhaseController
 
-Mechanika: Odpowiada za bezpieczny i nieblokujący pomiar upływu czasu (odporny na przepełnienie millis()), ograniczanie wartości (clamp) oraz utrzymywanie statystyk przejść przez zero i wyzwoleń triaka (volatile zmienne współdzielone).
+Controls phase-angle firing of the triac.
 
-4. Strategia Przyszłego Rozwoju Projektu
-System został zaprojektowany z myślą o łatwej rozbudowie i integracji z nowoczesnymi systemami automatyki budynkowej (Smart Home). Planowane są dwa kluczowe kierunki rozwoju:
+It converts the requested heater power percentage into a microsecond delay for the triac gate and protects the system from unsafe intermediate-power regions through the current safety logic.
 
-4.1. Integracja z Home Assistant (HA) i protokół MQTT
-W celu pełnej wizualizacji danych w panelu Home Assistant planuje się wdrożenie dwukierunkowej komunikacji sieciowej:
+### 3.4. AutoController
 
-Publikowanie Danych (State Topic): Sterownik będzie wysyłał na serwer MQTT informacje o aktualnej temperaturze, mocy wysterowania grzałki, częstotliwości sieci oraz statystykach jakości sygnału radiowego (QoS).
+Computes the target heater power based on:
+- inverter power,
+- battery power balance,
+- the configured battery draw limit,
+- the current Guardian block state.
 
-Sterowanie i Zmiana Nastaw (Command Topic): Home Assistant zyska możliwość zdalnej zmiany trybu pracy (np. wymuszenie grzania w trybie Manual przed planowaną kąpielą) oraz zmiany krytycznych nastaw parametrów zabezpieczeń modułu Guardian bezpośrednio z poziomu dashboardu Lovelace.
+### 3.5. Guardian
 
-Separacja Radiowa: Praca Wi-Fi w trybie dwufunkcyjnym (Dual Mode: ESP-NOW + Wi-Fi dla MQTT) zostanie zoptymalizowana na dedykowanym kanale, aby transmisja TCP/IP do brokera MQTT nie kolidowała z priorytetowym, krytycznym czasowo odbiorem ramek ESP-NOW.
+Acts as the safety supervisor.
 
-4.2. Modernizacja i Dopracowanie Nadajnika ESP-NOW
-Nadajnik telemetryczny, zlokalizowany bezpośrednio przy falowniku off-grid, zostanie zmodernizowany o następujące funkcjonalności:
+It stores and enforces the main limits:
+- maxPower,
+- powerStep,
+- maxBatteryDraw.
 
-Aktywne Potwierdzenia (ACK) i Retransmisja: Dodanie mechanizmu dwukierunkowej weryfikacji pakietów. W przypadku braku potwierdzenia odbioru ze strony odbiornika, nadajnik podejmie próbę powtórzenia wysyłki, co poprawi odporność na chwilowe zakłócenia w pasmie 2.4 GHz.
+These values are persisted in NVS and reloaded on startup.
 
-Dynamiczne Dopasowanie Mocy Radiowej: Nadajnik na podstawie informacji zwrotnej o liczbie zagubionych pakietów (dane z licznika getLostPackets() przesyłane z powrotem) będzie mógł automatycznie zwiększać moc nadawczą (Tx power), redukując ją do minimum przy doskonałym zasięgu w celu oszczędności energii i eliminacji smogu elektromagnetycznego.
+### 3.6. DisplayManager
 
-Wielofunkcyjny Sensor Prądu: Bezpośrednie podpięcie pod szyny falownika dedykowanego układu pomiarowego (np. przekładnika AC PZEM-004T lub czujników SCT) w celu jeszcze dokładniejszego wykrywania rzeczywistego kierunku przepływu energii w punkcie przyłączeniowym.
+Manages the LCD display screens and service-menu rendering.
+
+### 3.7. ControlPanel
+
+Handles user input and mode switching.
+
+## 4. Service menu order
+
+The service menu is organized in a practical order from input diagnostics to safety logic:
+
+1. ZeroCross diagnostics,
+2. PhaseController diagnostics,
+3. Guardian max power,
+4. Battery draw limit,
+5. Guardian delta power,
+6. ESP-NOW radio status,
+7. AutoController status.
+
+This keeps the flow diagnostic-first and safety-oriented.
+
+## 5. Verified build status
+
+The firmware was verified by running:
+
+platformio run
+
+Result: successful completion with exit code 0.
+
+## 6. Summary
+
+The current firmware is a local off-grid EMS controller for a resistive water-heater load. It uses inverter and battery telemetry, applies a soft-start ramp, and only allows full power when the available surplus and safety constraints are satisfied.

@@ -37,7 +37,7 @@ enum class SystemState {
 // Zmienne stanów
 SystemState currentSystemState = SystemState::SPLASH_SCREEN;
 uint8_t currentSubScreen = 0; // Dla Grupy 1: 0 = Główny, 1 = PV, 2 = Dom, 3 = Bat, 4 = Live Debug
-uint8_t currentServiceScreen = 2; // Dla Grupy 2: Ekrany diagnostyki od 2 do 7
+uint8_t currentServiceScreen = 2; // Dla Grupy 2: Ekrany diagnostyki od 2 do 8
 
 //==================================================
 // Zmienne czasowe (Tymery i Timeouty)
@@ -56,6 +56,7 @@ void setup() {
     
     // 1. Inicjalizacja loggera na samym początku
     logger.begin(SERIAL_BAUDRATE);
+    logger.setLoggingEnabled(false);
     logger.info(F("Sterownik Nadwyzki PV (EMS Wersja Lokalna)"));
     logger.info("Wersja: " + String(FW_VERSION));
     
@@ -89,7 +90,8 @@ void setup() {
     // Synchronizacja odczytanych wartości z modułem wyświetlacza
     displayManager.setMenuMaxPower(guardian.getMaxPower());
     displayManager.setMenuPowerStep(guardian.getPowerStep());
-    logger.info("Wczytano nastawy NVS - Max: " + String(guardian.getMaxPower()) + "W, Step: " + String(guardian.getPowerStep()) + "W");
+    displayManager.setMenuBatteryDraw(guardian.getMaxBatteryDraw());
+    logger.info("Wczytano nastawy NVS - Max: " + String(guardian.getMaxPower()) + "W, Step: " + String(guardian.getPowerStep()) + "W, BatDraw: " + String(guardian.getMaxBatteryDraw()) + "W");
 
     // 7. BEZPIECZNY START
     // Sterownik zawsze startuje w trybie OFF i z mocą 0%.
@@ -220,6 +222,7 @@ void loop()
                 // Zapewnienie aktualnych wartości na wyświetlaczu wchodząc w menu serwisowe
                 displayManager.setMenuMaxPower(guardian.getMaxPower());
                 displayManager.setMenuPowerStep(guardian.getPowerStep());
+                displayManager.setMenuBatteryDraw(guardian.getMaxBatteryDraw());
 
                 // BEZPIECZEŃSTWO: Całkowite wyłączenie grzałki przy diagnostyce serwisowej
                 power = 0;
@@ -309,13 +312,13 @@ void loop()
                 }
                 else
                 {
-                    // POPRAWKA: Przekazujemy teraz 6 parametrów. Szóstym parametrem jest
-                    // aktualna nastawa maksymalnej mocy pobierana z obiektu guardian.
+                    // Przekazujemy do AutoController tylko te parametry,
+                    // które są potrzebne do regulacji off-grid: moc falownika,
+                    // bilans baterii oraz aktualne limity bezpieczeństwa z Guardian.
                     power = autoController.calculateOffGridPower(
-                        espNowManager.getPVPower(),
                         espNowManager.getInverterPower(),
-                        espNowManager.getBatteryPower(), 
-                        MAX_BATTERY_DRAW_W, 
+                        espNowManager.getBatteryPower(),
+                        guardian.getMaxBatteryDraw(),
                         guardian.isBlocked(),
                         guardian.getMaxPower()
                     );
@@ -328,7 +331,7 @@ void loop()
         }
 
         // ---------------------------------------------------------------------
-        // 3. Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 - 7)
+        // 3. Grupa 2: Głębokie Menu Serwisowe (Ekrany 2 - 8)
         // ---------------------------------------------------------------------
         case SystemState::GROUP_2_SERVICE:
         {
@@ -340,7 +343,7 @@ void loop()
             }
 
             bool serviceTimeout = (millis() - serviceTimeoutTimer >= 30000);
-            bool exitServiceClicked = (currentServiceScreen == 7 && modeClicked);
+            bool exitServiceClicked = (currentServiceScreen == 8 && modeClicked);
 
             if (serviceTimeout || exitServiceClicked || modeHeld)
             {
@@ -369,6 +372,11 @@ void loop()
                     logger.info("Zapisano trwale w NVS: Guardian Inv Max = " + String(displayManager.getMenuMaxPower()) + "W");
                 }
                 else if (currentServiceScreen == 5) {
+                    guardian.setMaxBatteryDraw(displayManager.getMenuBatteryDraw());
+                    guardian.saveSettings(); // Zapis fizyczny na pamięć Flash
+                    logger.info("Zapisano trwale w NVS: Guardian Bat Draw = " + String(displayManager.getMenuBatteryDraw()) + "W");
+                }
+                else if (currentServiceScreen == 6) {
                     guardian.setPowerStep(displayManager.getMenuPowerStep());
                     guardian.saveSettings(); // Zapis fizyczny na pamięć Flash
                     logger.info("Zapisano trwale w NVS: Guardian Delta P = " + String(displayManager.getMenuPowerStep()) + "W");
@@ -386,6 +394,13 @@ void loop()
                 displayManager.setMenuMaxPower(currentMax);
             }
             else if (currentServiceScreen == 5)
+            {
+                uint16_t currentBatteryDraw = displayManager.getMenuBatteryDraw();
+                if (plusClicked && currentBatteryDraw < 2000)   currentBatteryDraw += 50;
+                if (minusClicked && currentBatteryDraw >= 50)   currentBatteryDraw -= 50;
+                displayManager.setMenuBatteryDraw(currentBatteryDraw);
+            }
+            else if (currentServiceScreen == 6)
             {
                 uint16_t currentStep = displayManager.getMenuPowerStep();
                 if (plusClicked && currentStep < 3000)   currentStep += 50;
@@ -440,23 +455,26 @@ void loop()
 
         displayManager.updateDiagnostics(currentZc, currentTriggers, lastEspNowPacketTime);
 
-        String logMsg = "State=" + String((int)currentSystemState) +
-                        " Mode=" + String((int)mode) +
-                        " Power=" + String(power) + "%" +
-                        " Freq=" + String(zeroCross.getFrequency(), 1) +
-                        " [DIAG: ZC_s=" + String(currentZc) + " TRI_s=" + String(currentTriggers) + "]";
-                        
-        if (guardian.isBlocked()) {
-            logMsg += " [ALARM: GUARDIAN BLOCKED! Powód: " + String((int)guardian.getBlockReason()) + "]";
-        } else {
-            if (espNowManager.isConnected()) {
-                logMsg += " [Radio: OK]";
+        if (logger.isLoggingEnabled())
+        {
+            String logMsg = "State=" + String((int)currentSystemState) +
+                            " Mode=" + String((int)mode) +
+                            " Power=" + String(power) + "%" +
+                            " Freq=" + String(zeroCross.getFrequency(), 1) +
+                            " [DIAG: ZC_s=" + String(currentZc) + " TRI_s=" + String(currentTriggers) + "]";
+                            
+            if (guardian.isBlocked()) {
+                logMsg += " [ALARM: GUARDIAN BLOCKED! Powód: " + String((int)guardian.getBlockReason()) + "]";
             } else {
-                logMsg += " [Radio: DISCONNECTED]";
+                if (espNowManager.isConnected()) {
+                    logMsg += " [Radio: OK]";
+                } else {
+                    logMsg += " [Radio: DISCONNECTED]";
+                }
             }
+            logMsg += " PV=" + String(espNowManager.getPVPower()) + "W";
+            logger.info(logMsg);
         }
-        logMsg += " PV=" + String(espNowManager.getPVPower()) + "W";
-        logger.info(logMsg);
     }
 
     // Odświeżenie danych telemetrycznych na ekranie

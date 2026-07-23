@@ -10,36 +10,46 @@ void Logger::setDebug(bool enable)
     debugEnabled = enable;
 }
 
+void Logger::setLoggingEnabled(bool enable)
+{
+    loggingEnabled = enable;
+}
+
+bool Logger::isLoggingEnabled() const
+{
+    return loggingEnabled;
+}
+
 // ==================================================
 // Implementacja dla obiektów String
 // ==================================================
 void Logger::debug(const String &msg) {
-    if (debugEnabled) print(Level::DEBUG, msg);
+    if (debugEnabled && loggingEnabled) print(Level::DEBUG, msg);
 }
 void Logger::info(const String &msg) {
-    print(Level::INFO, msg);
+    if (loggingEnabled) print(Level::INFO, msg);
 }
 void Logger::warning(const String &msg) {
-    print(Level::WARNING, msg);
+    if (loggingEnabled) print(Level::WARNING, msg);
 }
 void Logger::error(const String &msg) {
-    print(Level::ERROR, msg);
+    if (loggingEnabled) print(Level::ERROR, msg);
 }
 
 // ==================================================
 // Implementacja dla makra F() (FLASH)
 // ==================================================
 void Logger::debug(const __FlashStringHelper *msg) {
-    if (debugEnabled) print(Level::DEBUG, msg);
+    if (debugEnabled && loggingEnabled) print(Level::DEBUG, msg);
 }
 void Logger::info(const __FlashStringHelper *msg) {
-    print(Level::INFO, msg);
+    if (loggingEnabled) print(Level::INFO, msg);
 }
 void Logger::warning(const __FlashStringHelper *msg) {
-    print(Level::WARNING, msg);
+    if (loggingEnabled) print(Level::WARNING, msg);
 }
 void Logger::error(const __FlashStringHelper *msg) {
-    print(Level::ERROR, msg);
+    if (loggingEnabled) print(Level::ERROR, msg);
 }
 
 const char *Logger::levelToString(Level level)

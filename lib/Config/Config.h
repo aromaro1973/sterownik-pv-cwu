@@ -42,7 +42,6 @@ constexpr uint32_t HALF_CYCLE_DURATION_US = 10000; // Jeden półokres = 10ms (1
 // ---------- Limity Bezpieczeństwa (Guardian) ----------
 
 constexpr uint32_t MAX_INVERTER_POWER_W = 3500; // Stały limit obciążenia falownika (4.2kW max)
-constexpr uint32_t MAX_BATTERY_DRAW_W  = 400;  // Maksymalny pobór z akumulatora 24V dla grzałki
 
 // ---------- Zakres regulacji mocy grzałki ----------
 

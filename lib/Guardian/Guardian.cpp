@@ -5,6 +5,7 @@ Guardian::Guardian()
       m_blockReason(BlockReason::NONE), 
       m_maxInverterPowerW(2000), 
       m_powerStep(200),
+      m_maxBatteryDrawW(400),
       m_nominalHeaterPowerW(2000) {}
 
 void Guardian::begin(uint16_t nominalHeaterPower) {
@@ -70,6 +71,14 @@ uint16_t Guardian::getPowerStep() const {
     return m_powerStep;
 }
 
+void Guardian::setMaxBatteryDraw(uint16_t maxBatteryDrawW) {
+    m_maxBatteryDrawW = maxBatteryDrawW;
+}
+
+uint16_t Guardian::getMaxBatteryDraw() const {
+    return m_maxBatteryDrawW;
+}
+
 // Zapis parametrów do pamięci flash
 void Guardian::saveSettings() {
     Preferences prefs;
@@ -78,6 +87,7 @@ void Guardian::saveSettings() {
     
     prefs.putUShort("maxPower", m_maxInverterPowerW);
     prefs.putUShort("powerStep", m_powerStep);
+    prefs.putUShort("maxBatteryDraw", m_maxBatteryDrawW);
     
     prefs.end();
     Serial.println("[Guardian] Zapisano ustawienia bezpieczeństwa w pamięci NVS.");

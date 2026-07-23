@@ -42,6 +42,9 @@ public:
     uint16_t getMenuPowerStep() const;
     void setMenuPowerStep(uint16_t step);
 
+    uint16_t getMenuBatteryDraw() const;
+    void setMenuBatteryDraw(uint16_t batteryDrawW);
+
     void forceRefresh();
     void showSplashScreen(); 
 
@@ -63,6 +66,7 @@ private:
     void drawPhaseManagerScreen(); 
     void drawGuardianMaxPowerScreen(); 
     void drawGuardianDeltaPScreen(); 
+    void drawBatteryDrawScreen();
     void drawEspNowRadioScreen(const ESPNowManager& espNow); 
     void drawAutoControllerScreen(); 
 
@@ -80,6 +84,7 @@ private:
 
     uint16_t      m_menuMaxPower;
     uint16_t      m_menuPowerStep;
+    uint16_t      m_menuBatteryDraw;
 
     bool          m_refreshRequired;
     uint32_t      m_lastRefreshTime;

@@ -19,14 +19,13 @@ public:
     
     /**
      * @brief Główny algorytm EMS wyliczający optymalne wysterowanie grzałki
-     * @param powerPV Aktualna generacja z paneli fotowoltaicznych [W]
      * @param powerInv Aktualna moc obciążenia falownika [W]
      * @param powerBat Bilans mocy akumulatora [W] (dodatnia = rozładowanie, ujemna = ładowanie)
      * @param maxBatDischargeW Maksymalne dopuszczalne rozładowanie baterii na cele grzałki [W]
      * @param guardianBlocked Flaga twardego odcięcia wygenerowana przez Guardian
      * @param guardianMaxPower Ustawiony w Guardianie limit mocy falownika [W]
      */
-    uint8_t calculateOffGridPower(int32_t powerPV, int32_t powerInv, int32_t powerBat, 
+    uint8_t calculateOffGridPower(int32_t powerInv, int32_t powerBat,
                                   int32_t maxBatDischargeW, bool guardianBlocked, uint16_t guardianMaxPower);
 
     void reset();

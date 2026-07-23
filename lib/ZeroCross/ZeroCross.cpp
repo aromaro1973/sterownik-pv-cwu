@@ -25,9 +25,9 @@ void ZeroCross::begin() {
 void IRAM_ATTR ZeroCross::isr() {
     uint32_t now = micros();
 
-    // Filtr zakłóceń (4 ms) - zapobiega szumom szpilkowym na sieci
+    // Filtr zakłóceń (8.5 ms) - zapobiega szumom szpilkowym na sieci
     if (_lastPulseMicros != 0) {
-        if ((now - _lastPulseMicros) < 4000) { 
+        if ((now - _lastPulseMicros) < 8500) { 
             return; // Ignoruj zbyt szybkie, fałszywe impulsy
         }
     }

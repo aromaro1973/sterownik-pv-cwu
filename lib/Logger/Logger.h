@@ -29,9 +29,12 @@ public:
     void error(const __FlashStringHelper *msg);
 
     void setDebug(bool enable);
+    void setLoggingEnabled(bool enable);
+    bool isLoggingEnabled() const;
 
 private:
     bool debugEnabled = true;
+    bool loggingEnabled = false;
 
     void printPrefix(Level level);
     

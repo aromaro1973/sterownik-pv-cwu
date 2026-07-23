@@ -11,6 +11,7 @@ DisplayManager::DisplayManager()
       m_currentServiceScreen(2),
       m_menuMaxPower(3500),
       m_menuPowerStep(1000),
+      m_menuBatteryDraw(400),
       m_refreshRequired(true),
       m_lastRefreshTime(0),
       m_splashScreenRendered(false),
@@ -99,6 +100,9 @@ void DisplayManager::setMenuMaxPower(uint16_t power) { if (m_menuMaxPower != pow
 uint16_t DisplayManager::getMenuPowerStep() const { return m_menuPowerStep; }
 void DisplayManager::setMenuPowerStep(uint16_t step) { if (m_menuPowerStep != step) { m_menuPowerStep = step; m_refreshRequired = true; } }
 
+uint16_t DisplayManager::getMenuBatteryDraw() const { return m_menuBatteryDraw; }
+void DisplayManager::setMenuBatteryDraw(uint16_t batteryDrawW) { if (m_menuBatteryDraw != batteryDrawW) { m_menuBatteryDraw = batteryDrawW; m_refreshRequired = true; } }
+
 void DisplayManager::forceRefresh() { m_refreshRequired = true; m_lastRefreshTime = 0; }
 
 void DisplayManager::showSplashScreen()
@@ -157,12 +161,13 @@ void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
         case DisplayScreen::SERVICE:
             switch (m_currentServiceScreen)
             {
-                case 2: drawZeroCrossScreen(); break;
-                case 3: drawPhaseManagerScreen(); break;
-                case 4: drawGuardianMaxPowerScreen(); break;
-                case 5: drawGuardianDeltaPScreen(); break;
-                case 6: drawEspNowRadioScreen(espNow); break;
-                case 7: drawAutoControllerScreen(); break;
+                case 2: drawZeroCrossScreen(); break;          // Diagnostyka wejścia sieci AC
+                case 3: drawPhaseManagerScreen(); break;       // Diagnostyka triaka / fazy
+                case 4: drawGuardianMaxPowerScreen(); break;   // Limit falownika
+                case 5: drawBatteryDrawScreen(); break;        // Limit rozładowania baterii
+                case 6: drawGuardianDeltaPScreen(); break;     // Delta bezpieczeństwa
+                case 7: drawEspNowRadioScreen(espNow); break;  // Status ESP-NOW
+                case 8: drawAutoControllerScreen(); break;     // Stan logiki EMS
             }
             break;
     }
@@ -285,6 +290,14 @@ void DisplayManager::drawGuardianDeltaPScreen()
     m_lcd.print("GUARDIAN DYNC:ON");
     m_lcd.setCursor(0, 1);
     m_lcd.printf("Max dP:   %4uW", m_menuPowerStep);
+}
+
+void DisplayManager::drawBatteryDrawScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("BAT DRAW LIMIT");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("MAX DRAW: %4uW", m_menuBatteryDraw);
 }
 
 void DisplayManager::drawEspNowRadioScreen(const ESPNowManager& espNow)

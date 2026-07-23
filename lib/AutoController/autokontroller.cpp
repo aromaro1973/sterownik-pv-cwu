@@ -21,7 +21,7 @@ void AutoController::reset()
     m_lastRegTime = millis();
 }
 
-uint8_t AutoController::calculateOffGridPower(int32_t powerPV, int32_t powerInv, int32_t powerBat, 
+uint8_t AutoController::calculateOffGridPower(int32_t powerInv, int32_t powerBat,
                                               int32_t maxBatDischargeW, bool guardianBlocked, uint16_t guardianMaxPower)
 {
     // Bezwzględne odcięcie awaryjne z Guardiana
@@ -39,7 +39,9 @@ uint8_t AutoController::calculateOffGridPower(int32_t powerPV, int32_t powerInv,
     // -------------------------------------------------------------------------
     int32_t invWarningThresholdW = (int32_t)(guardianMaxPower * 0.85f);
 
-    // Inteligenta pozycja startowa (Pre-positioning) przy włączeniu
+    // Inteligenta pozycja startowa (Pre-positioning) przy włączeniu.
+    // W off-grid najpierw dopuszczamy płynny rozruch, a nie natychmiastowy skok
+    // do pełnej mocy. Wartości 0–47% tworzą strefę regulacji fazowej.
     if (m_inSoftStart && m_currentPowerPercent == 0)
     {
         if (powerInv < invWarningThresholdW && powerBat < 0) 
@@ -100,7 +102,7 @@ uint8_t AutoController::calculateOffGridPower(int32_t powerPV, int32_t powerInv,
         }
 
         // -------------------------------------------------------------------------
-        // KROK 3: Sprawdzenie baterii (Regulacja na podstawie warunków pogodowych / PV)
+        // KROK 3: Sprawdzenie baterii (regulacja off-grid na podstawie bilansu baterii)
         // -------------------------------------------------------------------------
         if (powerBat > maxBatDischargeW)
         {
@@ -122,7 +124,12 @@ uint8_t AutoController::calculateOffGridPower(int32_t powerPV, int32_t powerInv,
         }
         else
         {
-            // Falownik ma luz i akumulator się ładuje -> Zwiększamy obciążenie grzałki
+            // Falownik ma luz i akumulator się ładuje -> zwiększamy obciążenie grzałki.
+            // W strefie 0–47% moc jest podnoszona płynnie, aby uniknąć szarpania.
+            // Gdy moc osiągnie 47%, regulator nie skacze od razu na 100%.
+            // Czeka na warunki, które potwierdzą, że falownik ma wystarczający zapas
+            // i że bateria nadal będzie się ładować. Wtedy dopiero następuje gwałtowny skok
+            // do 100%, co jest akceptowalne z punktu widzenia off-grid i bezpieczeństwa falownika.
             if (m_currentPowerPercent < 47)
             {
                 uint8_t stepUpPercent = (80 * 100) / m_heaterPowerW; // Płynny krok w górę ~80W
@@ -133,16 +140,16 @@ uint8_t AutoController::calculateOffGridPower(int32_t powerPV, int32_t powerInv,
             }
             else if (m_currentPowerPercent == 47)
             {
-                // Warunek skoku na 100%: 
-                // Zapas falownika musi pomieścić resztę mocy grzałki, a bateria musi mieć duży prąd ładowania
-                int32_t addedPowerW = (m_heaterPowerW * 53) / 100; 
-                
+                // 47% jest strefą oczekiwania na nadwyżkę. Jeżeli falownik ma zapas
+                // i akumulator ma realny nadmiar ładowania, wtedy następuje skok na 100%.
+                int32_t addedPowerW = (m_heaterPowerW * 53) / 100;
+
                 bool invHasRoom = (powerInv + addedPowerW) < invWarningThresholdW;
                 bool batHasSurplus = powerBat < -(addedPowerW * 0.7f);
 
                 if (invHasRoom && batHasSurplus)
                 {
-                    m_currentPowerPercent = 100; // Skok na czystą sinusoidę
+                    m_currentPowerPercent = 100;
                 }
             }
         }

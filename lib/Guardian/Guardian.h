@@ -31,6 +31,9 @@ public:
     void setPowerStep(uint16_t step);
     uint16_t getPowerStep() const;
 
+    void setMaxBatteryDraw(uint16_t maxBatteryDrawW);
+    uint16_t getMaxBatteryDraw() const;
+
     // Funkcje obsługi pamięci nieulotnej flash (NVS)
     void saveSettings();
     void loadSettings();
@@ -40,6 +43,7 @@ private:
     BlockReason m_blockReason;
     uint16_t m_maxInverterPowerW;
     uint16_t m_powerStep;
+    uint16_t m_maxBatteryDrawW;
     uint16_t m_nominalHeaterPowerW;
 };
 
