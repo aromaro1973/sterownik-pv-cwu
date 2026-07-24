@@ -1,111 +1,81 @@
 # Sterownik PV-CWU / EMS Off-Grid
 
-Documentation of the current off-grid energy management firmware for a resistive hot-water heater controller.
+Aktualna dokumentacja firmware dla sterownika grzalki CWU sterowanej z nadwyzek energii off-grid.
 
-## 1. Project goal
+## Cel projektu
 
-The system receives telemetry from an off-grid inverter and safely directs surplus photovoltaic energy to the heater load while maintaining battery safety and inverter stability.
+Sterownik odbiera telemetrie z falownika przez ESP-NOW i steruje grzalka tak, aby:
+- maksymalnie wykorzystac nadwyzke,
+- nie przeciazyc falownika,
+- nie przekroczyc dopuszczalnego rozladowania baterii,
+- reagowac bezpiecznie na zanik telemetrii.
 
-The current logic is intentionally off-grid oriented:
-- heating is driven by inverter and battery telemetry,
-- PV power is treated as diagnostic input rather than the main control signal,
-- the system keeps a smooth ramp-up and only allows full power when the safety conditions are satisfied.
+## Tryby pracy
 
-## 2. Current operating logic
+- `AUTO`: algorytm wylicza zadana moc na podstawie mocy falownika i baterii.
+- `MANUAL`: tryb dwuetapowy:
+	- etap ustawiania (`SET`) - PLUS/MINUS zmieniaja moc,
+	- etap pracy - moc jest utrzymywana stale.
+- `OFF`: grzalka wylaczona.
 
-### 2.1. Power rule
+Po starcie zasilania sterownik uruchamia sie w `AUTO` z moca `0%`.
 
-The present control law is:
-- 0-47%: smooth power regulation,
-- threshold at 47%: the system stops the smooth ramp and waits for surplus conditions,
-- 100%: full power is only enabled when the controller confirms a safe surplus and the protection constraints allow it.
+## Failsafe komunikacji
 
-This preserves a soft start and prevents an abrupt jump from low power to full power.
+Failsafe (7 s) dziala globalnie:
+- przy braku nowych ramek lub zamrozeniu telemetrii tryb `AUTO` pozostaje aktywny,
+- moc jest zrzucana do `0%`,
+- po powrocie telemetrii regulacja `AUTO` wznawia sie automatycznie.
 
-### 2.2. Automatic mode
+## Zasada sterowania moca
 
-In AUTO mode the controller uses:
-- inverter power,
-- battery power balance,
-- the configurable battery discharge limit stored by Guardian,
-- the safety block state managed by Guardian.
+- `0..47%`: sterowanie fazowe.
+- `48..99%`: komenda ograniczana do `47%`.
+- `100%`: pelna fala z histereza podtrzymania (latched full power) w `PhaseController`.
 
-In MANUAL mode the heater power is controlled directly by the user.
+## Interfejs LCD i klawisze
 
-## 3. Module architecture
+Ekrany glowne i menu:
+- `MAIN`: tryb i stan grzalki.
+- `INFO` (7 ekranow): radio, zero-cross, triak, auto, moc grzania, moc falownika, moc baterii.
+- `CONFIG` (4 ekrany):
+	1. MOC MAX FALOWNIK
+	2. MAX ROZLAD. BATER.
+	3. CZAS ZWLOKA PV
+	4. MOC GRZALKI
 
-### 3.1. main.cpp
+Mapowanie klawiszy na ekranie glownym:
+- `MODE`: cykl OFF -> AUTO -> MANUAL SET -> MANUAL RUN -> OFF,
+- `PLUS`: wejscie do INFO (poza MANUAL SET),
+- `MINUS`: wejscie do CONFIG (poza MANUAL SET),
+- `MODE` long (2 s): szybki zrzut do OFF.
 
-Coordinates the complete firmware:
-- initializes all modules,
-- maintains the system state machine,
-- handles service-menu activity,
-- drives the user interface loop.
+## Rola modulow
 
-### 3.2. ZeroCross
+- `src/main.cpp`: maszyna stanow i orkiestracja.
+- `lib/ESPNowManager`: odbior telemetrii i diagnostyka ramek.
+- `lib/AutoController`: regulator mocy w watach.
+- `lib/PhaseController`: wykonanie triaka i polityka 47/100.
+- `lib/ZeroCross`: detekcja przejsc przez zero i synchronizacja.
+- `lib/Guardian`: parametry i zapis/odczyt NVS.
+- `lib/DisplayManager`: renderowanie LCD.
+- `lib/ControlPanel`: obsluga przyciskow.
+- `lib/Logger`, `lib/Utils`, `lib/Config`: narzedzia i konfiguracja.
 
-Detects zero crossing of the AC mains waveform.
+## Build
 
-It operates as the fast hardware path:
-- uses attachInterrupt(...),
-- filters false zero-cross pulses,
-- provides timing synchronization to the triac driver.
+Zweryfikowane lokalnie:
 
-### 3.3. PhaseController
+`platformio run`
 
-Controls phase-angle firing of the triac.
+Wynik: `Exit Code: 0`.
 
-It converts the requested heater power percentage into a microsecond delay for the triac gate and protects the system from unsafe intermediate-power regions through the current safety logic.
+## Testy funkcjonalne
 
-### 3.4. AutoController
+Szczegolowy scenariusz testow po wgraniu firmware znajduje sie w pliku [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 
-Computes the target heater power based on:
-- inverter power,
-- battery power balance,
-- the configured battery draw limit,
-- the current Guardian block state.
+## Dokumenty dla uzytkownika
 
-### 3.5. Guardian
+Instrukcja do druku dla uzytkownika koncowego znajduje sie w pliku [docs/INSTRUKCJA_UZYTKOWNIKA.md](docs/INSTRUKCJA_UZYTKOWNIKA.md).
 
-Acts as the safety supervisor.
-
-It stores and enforces the main limits:
-- maxPower,
-- powerStep,
-- maxBatteryDraw.
-
-These values are persisted in NVS and reloaded on startup.
-
-### 3.6. DisplayManager
-
-Manages the LCD display screens and service-menu rendering.
-
-### 3.7. ControlPanel
-
-Handles user input and mode switching.
-
-## 4. Service menu order
-
-The service menu is organized in a practical order from input diagnostics to safety logic:
-
-1. ZeroCross diagnostics,
-2. PhaseController diagnostics,
-3. Guardian max power,
-4. Battery draw limit,
-5. Guardian delta power,
-6. ESP-NOW radio status,
-7. AutoController status.
-
-This keeps the flow diagnostic-first and safety-oriented.
-
-## 5. Verified build status
-
-The firmware was verified by running:
-
-platformio run
-
-Result: successful completion with exit code 0.
-
-## 6. Summary
-
-The current firmware is a local off-grid EMS controller for a resistive water-heater load. It uses inverter and battery telemetry, applies a soft-start ramp, and only allows full power when the available surplus and safety constraints are satisfied.
+Wersja skrocona pod wydruk A4 znajduje sie w pliku [docs/INSTRUKCJA_UZYTKOWNIKA_A4.md](docs/INSTRUKCJA_UZYTKOWNIKA_A4.md).

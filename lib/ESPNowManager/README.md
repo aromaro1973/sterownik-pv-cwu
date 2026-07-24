@@ -1,8 +1,16 @@
-Moduł: ESPNowManager (v1.0)Moduł ESPNowManager odpowiada za realizację szybkiej, niskopoziomowej komunikacji bezprzewodowej w technologii ESP-NOW. Jego zadaniem jest bezodbiorowy i bezpołączeniowy odbiór kluczowych parametrów telemetrycznych z falownika off-grid oraz weryfikacja stabilności transmisji (Quality of Service - QoS).📡 Architektura transmisji i optymalizacja ramkiDla zapewnienia najwyższej wydajności oraz minimalizacji narzutu radiowego, przesyłany pakiet danych został skompresowany przy użyciu atrybutu upakowania struktur języka C: __attribute__((packed)).Struktura ramki telemetrycznej (InverterPacket):Dzięki precyzyjnemu doborowi typów danych, struktura zajmuje dokładnie 10 bajtów w pamięci i może być bezpośrednio rzutowana z surowego bufora odbiorczego karty sieciowej:Pole w strukturzeTyp danychRozmiarOpis rolipacketIduint32_t4 bajtyMonotonicznie rosnący licznik (do detekcji przerw w transmisji).pvPoweruint16_t2 bajtyAktualna moc generowana z paneli fotowoltaicznych $[W]$.inverterPoweruint16_t2 bajtyObciążenie wyjściowe falownika (pobór prądu przez dom) $[W]$.batteryPowerint16_t2 bajtyBilans baterii (wartość ujemna = ładowanie, dodatnia = rozładowanie) $[W]$.🧠 Rozwiązania techniczne w implementacji1. Mostek C-to-C++ (Callback Wrapper)Interfejs API systemu operacyjnego ESP-IDF (oraz Arduino core dla ESP32) obsługuje zdarzenia sieciowe za pomocą klasycznych, globalnych funkcji zwrotnych (callbacks) w stylu języka C. Ponieważ funkcje te nie mają dostępu do kontekstu obiektu klasy C++, wdrożono wzorzec projektowy mostka (wrappera) z użyciem wskaźnika statycznego instance:C++static ESPNowManager* instance = nullptr;
+﻿# ESPNowManager
 
-void onDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
-    if (instance != nullptr) {
-        instance->handleRx(data, len); // Bezpieczne przekazanie do instancji klasy
-    }
-}
-2. Monitorowanie jakości sygnału i diagnostyka (QoS)Podczas odbioru każdego pakietu wywoływana jest funkcja handleRx(), która:Mierzy interwał (jitter): Oblicza dokładny czas, jaki upłynął od odebrania poprzedniego pakietu (m_lastPeriodMs).Zlicza utracone pakiety: Porównuje odebrane packetId z wartością oczekiwaną (m_expectedPacketId). Jeśli wystąpiła przerwa (np. zakłócenie radiowe), różnica jest dodawana do globalnego licznika zgubionych ramek m_lostPackets.3. Zabezpieczenie przed utratą łączności (Keep-Alive)Metoda update() cyklicznie sprawdza czas od odebrania ostatniej poprawnej ramki.Jeśli dane nie dotarły przez ponad 7 sekund, połączenie zostaje oznaczone jako utracone (m_connected = false).W celach bezpieczeństwa bilans baterii jest zerowany (m_batteryPower = 0), a po odzyskaniu sygnału maszyna stanów synchronizuje na nowo identyfikatory pakietów.🛠️ Opis interfejsu programistycznego (API)Metody publiczneESPNowManager()Opis: Konstruktor klasy. Inicjalizuje zmienne diagnostyczne oraz parametry pomiarów wartościami domyślnymi (bezpiecznymi dla systemu).void begin()Opis: Przypisuje instancję obiektu do globalnego wskaźnika, inicjalizuje stos protokołu ESP-NOW i rejestruje funkcję zwrotną odbioru danych.void update()Opis: Wykonywana w pętli głównej loop(). Odpowiada za watchdog czasowy połączenia radiowego.void handleRx(const uint8_t* incomingData, int len)Opis: Niskopoziomowy procesor pakietu. Parsuje odebrane bajty do struktury InverterPacket, oblicza statystyki czasowe oraz aktualizuje wewnętrzny stan pomiarów.Gettery danychuint16_t getPVPower() const – Zwraca moc paneli PV $[W]$.uint16_t getInverterPower() const – Zwraca obciążenie AC falownika $[W]$.int16_t getBatteryPower() const – Zwraca bilans baterii $[W]$ (znakowany).Gettery diagnostycznebool isConnected() const – Informuje, czy połączenie z nadajnikiem jest aktywne.uint32_t getPacketCounter() const – Zwraca łączną liczbę odebranych pakietów od startu.uint32_t getLostPackets() const – Zwraca liczbę zidentyfikowanych zgubionych pakietów.uint32_t getLastPeriodMs() const – Zwraca czas w $[ms]$ pomiędzy dwoma ostatnimi pakietami.
+Modul obsluguje odbior telemetrii z falownika przez ESP-NOW.
+
+## Funkcje
+
+- inicjalizacja odbioru ESP-NOW,
+- parsowanie pakietu `InverterPacket`,
+- aktualizacja mocy: PV, falownik, bateria,
+- diagnostyka lacza (licznik pakietow, straty, okres pakietu),
+- wykrywanie utraty lacznosci (timeout 7 s).
+
+## Uwagi
+
+- callback ESP-NOW jest przekierowany przez wrapper C do instancji klasy,
+- przy utracie lacznosci modul oznacza `connected=false` i resetuje synchronizacje ID pakietow.

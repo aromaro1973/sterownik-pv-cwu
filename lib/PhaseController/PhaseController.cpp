@@ -4,6 +4,8 @@
 // Inicjalizacja składowych statycznych klasy
 uint8_t PhaseController::_triacPin = 0;
 volatile uint32_t PhaseController::_delayMicros = 10000; 
+volatile uint8_t PhaseController::_appliedPowerPercent = 0;
+bool PhaseController::_fullPowerLatched = false;
 esp_timer_handle_t PhaseController::_timerHandle;
 
 void PhaseController::begin(uint8_t triacPin) {
@@ -64,20 +66,35 @@ void IRAM_ATTR PhaseController::onTimerFire(void* arg) {
 
 void PhaseController::setPower(int percent) {
     if (percent <= 0) {
+        _fullPowerLatched = false;
+        _appliedPowerPercent = 0;
         _delayMicros = 10000;
         return;
     }
-    
-    // Sztywne cięcie – blokujemy moc w strefie martwej, dopóki nie osiągnie pełnych 100%
-    if (percent > 47 && percent < 100) {
-        percent = 47; 
-    }
-    
+
     if (percent >= 100) {
-        _delayMicros = 0; // Wartość 0 odpali triak natychmiast w funkcji trigger()
+        _fullPowerLatched = true;
+        _appliedPowerPercent = 100;
+        _delayMicros = 0;
         return;
     }
-    
+
+    if (_fullPowerLatched) {
+        if (percent >= 80) {
+            _appliedPowerPercent = 100;
+            _delayMicros = 0;
+            return;
+        }
+
+        _fullPowerLatched = false;
+    }
+
+    if (percent > 47) {
+        percent = 47;
+    }
+
+    _appliedPowerPercent = (uint8_t)percent;
+
     // Mapowanie zakresu 0-47% na mikrosekundy 
     // (9100 us to minimum, 5500 us to maksimum mocy na zboczu opadającym)
     _delayMicros = map(percent, 0, 47, 9100, 5500); 
@@ -85,4 +102,8 @@ void PhaseController::setPower(int percent) {
 
 uint32_t PhaseController::getDelayMicros() {
     return _delayMicros;
+}
+
+uint8_t PhaseController::getAppliedPower() {
+    return _appliedPowerPercent;
 }

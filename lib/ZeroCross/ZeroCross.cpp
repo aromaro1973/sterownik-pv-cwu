@@ -2,11 +2,6 @@
 #include "ZeroCross.h"
 #include "PhaseController.h" 
 #include <Utils.h>           
-#include <Guardian.h>
-
-// Referencja do globalnej instancji Guardiana zadeklarowanej w main.cpp
-// Dzięki temu mamy do niej błyskawiczny dostęp wewnątrz przerwania
-extern Guardian guardian;
 
 // Definicje zmiennych statycznych
 volatile bool ZeroCross::_zeroCrossed = false;
@@ -33,15 +28,6 @@ void IRAM_ATTR ZeroCross::isr() {
     }
     _lastPulseMicros = now;
 
-    // =========================================================================
-    // NOWOŚĆ: ULTRASZYBKA REAKCJA GUARDIANA (Bezpieczeństwo sprzętowe)
-    // =========================================================================
-    // Jeśli Guardian zarejestrował blokadę awaryjną (np. w pętli lub przy odbiorze ESP-NOW),
-    // natychmiast przerywamy wykonanie i NIE odpalamy triaka w tej połówce fali.
-    if (guardian.isBlocked()) {
-        return; 
-    }
-
     _zeroCrossed = true;
     _pulseCount++;
     Utils::zcCounter++; 
@@ -54,9 +40,13 @@ void ZeroCross::update() {
     // Obliczanie częstotliwości sieci raz na sekundę
     uint32_t now = millis();
     if (now - _lastPulseTime >= 1000) {
-        // Obliczamy częstotliwość na podstawie odfiltrowanych impulsów
-        _frequency = (_pulseCount / 2.0f) * (1000.0f / (now - _lastPulseTime));
+        noInterrupts();
+        uint32_t pulseCount = _pulseCount;
         _pulseCount = 0;
+        interrupts();
+
+        // Obliczamy częstotliwość na podstawie odfiltrowanych impulsów
+        _frequency = (pulseCount / 2.0f) * (1000.0f / (now - _lastPulseTime));
         _lastPulseTime = now;
     }
 }

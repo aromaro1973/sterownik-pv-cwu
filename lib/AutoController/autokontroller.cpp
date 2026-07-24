@@ -2,9 +2,9 @@
 
 AutoController::AutoController()
     : m_heaterPowerW(2000),
+    m_requestedPowerW(0),
       m_currentPowerPercent(0),
-      m_lastRegTime(0),
-      m_inSoftStart(true)
+    m_increaseHoldUntilMs(0)
 {
 }
 
@@ -14,145 +14,77 @@ void AutoController::begin(uint16_t nominalHeaterPower)
     reset();
 }
 
+void AutoController::setHeaterPower(uint16_t nominalHeaterPower)
+{
+    m_heaterPowerW = nominalHeaterPower;
+}
+
+uint16_t AutoController::getHeaterPower() const
+{
+    return m_heaterPowerW;
+}
+
 void AutoController::reset()
 {
+    m_requestedPowerW = 0;
     m_currentPowerPercent = 0;
-    m_inSoftStart = true;
-    m_lastRegTime = millis();
+    m_increaseHoldUntilMs = 0;
 }
 
 uint8_t AutoController::calculateOffGridPower(int32_t powerInv, int32_t powerBat,
-                                              int32_t maxBatDischargeW, bool guardianBlocked, uint16_t guardianMaxPower)
+                                              int32_t maxBatDischargeW, uint16_t inverterMaxPowerW, uint16_t stepPowerW,
+                                              uint16_t pvHoldDelayMs)
 {
-    // Bezwzględne odcięcie awaryjne z Guardiana
-    if (guardianBlocked)
+    uint32_t now = millis();
+    uint16_t controlStepW = stepPowerW == 0 ? 1 : stepPowerW;
+    int32_t workingInverterLimitW = (int32_t)((uint32_t)inverterMaxPowerW * 90U / 100U);
+    uint32_t holdDelay = pvHoldDelayMs == 0 ? 1 : pvHoldDelayMs;
+
+    // Twarde zabezpieczenie: jeśli inwerter przekroczył limit użytkownika,
+    // natychmiast wycofujemy obciążenie i zaczynamy analizę od zera.
+    if (powerInv > inverterMaxPowerW)
     {
-        if (m_currentPowerPercent > 0 || !m_inSoftStart)
-        {
-            reset();
-        }
+        reset();
         return 0;
     }
 
-    // -------------------------------------------------------------------------
-    // KROK 1: Obliczenie strefy bezpieczeństwa (15% marginesu od limitu Guardiana)
-    // -------------------------------------------------------------------------
-    int32_t invWarningThresholdW = (int32_t)(guardianMaxPower * 0.85f);
+    int32_t batteryOverdrawW = powerBat - maxBatDischargeW;
+    int32_t inverterOverdrawW = powerInv - workingInverterLimitW;
 
-    // Inteligenta pozycja startowa (Pre-positioning) przy włączeniu.
-    // W off-grid najpierw dopuszczamy płynny rozruch, a nie natychmiastowy skok
-    // do pełnej mocy. Wartości 0–47% tworzą strefę regulacji fazowej.
-    if (m_inSoftStart && m_currentPowerPercent == 0)
+    // Zejście w dół jest natychmiastowe. Korekta wykorzystuje rzeczywisty nadmiar,
+    // a nie stały procent, więc szybciej wraca do bezpiecznego punktu pracy.
+    if (batteryOverdrawW > 0 || inverterOverdrawW > 0)
     {
-        if (powerInv < invWarningThresholdW && powerBat < 0) 
-        {
-            int32_t initialSurplusW = abs(powerBat);
-            uint32_t calculatedPercent = (initialSurplusW * 100) / m_heaterPowerW;
-            
-            if (calculatedPercent > 47 && calculatedPercent < 90)
-            {
-                m_currentPowerPercent = 47;
-            }
-            else if (calculatedPercent >= 90)
-            {
-                if ((powerInv + m_heaterPowerW) < invWarningThresholdW) {
-                    m_currentPowerPercent = 100;
-                } else {
-                    m_currentPowerPercent = 47;
-                }
-            }
-            else
-            {
-                m_currentPowerPercent = (uint8_t)calculatedPercent;
-            }
+        uint16_t correctionW = controlStepW;
+        if (batteryOverdrawW > correctionW) {
+            correctionW = batteryOverdrawW;
+        }
+        if (inverterOverdrawW > correctionW) {
+            correctionW = inverterOverdrawW;
+        }
 
-            m_lastRegTime = millis();
-            return m_currentPowerPercent;
+        if (m_requestedPowerW > correctionW) {
+            m_requestedPowerW -= correctionW;
+        } else {
+            m_requestedPowerW = 0;
         }
     }
-
-    uint32_t now = millis();
-    
-    // Wykonanie właściwego kroku regulacji co 500ms
-    if (now - m_lastRegTime >= 500)
+    else if (now >= m_increaseHoldUntilMs && m_requestedPowerW < m_heaterPowerW)
     {
-        m_lastRegTime = now;
-
-        // -------------------------------------------------------------------------
-        // KROK 2: Porównanie aktualnej mocy falownika z wyliczoną strefą bezpieczeństwa
-        // -------------------------------------------------------------------------
-        if (powerInv >= invWarningThresholdW)
-        {
-            // Przekroczyliśmy bezpieczną strefę falownika -> Natychmiastowa reakcja ochronna
-            if (m_currentPowerPercent == 100)
-            {
-                m_currentPowerPercent = 47; // Natychmiastowy spadek do strefy fazowej
-            }
-            else
-            {
-                // Szybkie liniowe ściąganie mocy w dół w zakresie fazowym (krok ~200W)
-                uint8_t stepDownPercent = (200 * 100) / m_heaterPowerW; 
-                if (stepDownPercent < 8) stepDownPercent = 8;
-
-                if (m_currentPowerPercent >= stepDownPercent) m_currentPowerPercent -= stepDownPercent;
-                else                                         m_currentPowerPercent = 0;
-            }
-            m_inSoftStart = false;
-            return m_currentPowerPercent; // Przerywamy, ochrona falownika ma priorytet
+        // Wzrost mocy jest celowo powolny. Po każdym kroku dajemy PV czas
+        // na dociągnięcie mocy, zanim ocenimy wpływ na baterię.
+        uint32_t nextPowerW = (uint32_t)m_requestedPowerW + controlStepW;
+        if (nextPowerW > m_heaterPowerW) {
+            nextPowerW = m_heaterPowerW;
         }
 
-        // -------------------------------------------------------------------------
-        // KROK 3: Sprawdzenie baterii (regulacja off-grid na podstawie bilansu baterii)
-        // -------------------------------------------------------------------------
-        if (powerBat > maxBatDischargeW)
-        {
-            // Bateria rozładowuje się zbyt mocno (np. chmura zasłoniła panele)
-            if (m_currentPowerPercent == 100)
-            {
-                m_currentPowerPercent = 47; // Nagły spadek wydajności PV -> zrzut do 47%
-            }
-            else
-            {
-                // Płynniejsza redukcja krokowa w strefie fazowej (krok ~150W)
-                uint8_t stepDownPercent = (150 * 100) / m_heaterPowerW; 
-                if (stepDownPercent < 5) stepDownPercent = 5;
+        m_requestedPowerW = (uint16_t)nextPowerW;
+        m_increaseHoldUntilMs = now + holdDelay;
+    }
 
-                if (m_currentPowerPercent >= stepDownPercent) m_currentPowerPercent -= stepDownPercent;
-                else                                         m_currentPowerPercent = 0;
-            }
-            m_inSoftStart = false;
-        }
-        else
-        {
-            // Falownik ma luz i akumulator się ładuje -> zwiększamy obciążenie grzałki.
-            // W strefie 0–47% moc jest podnoszona płynnie, aby uniknąć szarpania.
-            // Gdy moc osiągnie 47%, regulator nie skacze od razu na 100%.
-            // Czeka na warunki, które potwierdzą, że falownik ma wystarczający zapas
-            // i że bateria nadal będzie się ładować. Wtedy dopiero następuje gwałtowny skok
-            // do 100%, co jest akceptowalne z punktu widzenia off-grid i bezpieczeństwa falownika.
-            if (m_currentPowerPercent < 47)
-            {
-                uint8_t stepUpPercent = (80 * 100) / m_heaterPowerW; // Płynny krok w górę ~80W
-                if (stepUpPercent < 4) stepUpPercent = 4;
-
-                m_currentPowerPercent += stepUpPercent;
-                if (m_currentPowerPercent > 47) m_currentPowerPercent = 47;
-            }
-            else if (m_currentPowerPercent == 47)
-            {
-                // 47% jest strefą oczekiwania na nadwyżkę. Jeżeli falownik ma zapas
-                // i akumulator ma realny nadmiar ładowania, wtedy następuje skok na 100%.
-                int32_t addedPowerW = (m_heaterPowerW * 53) / 100;
-
-                bool invHasRoom = (powerInv + addedPowerW) < invWarningThresholdW;
-                bool batHasSurplus = powerBat < -(addedPowerW * 0.7f);
-
-                if (invHasRoom && batHasSurplus)
-                {
-                    m_currentPowerPercent = 100;
-                }
-            }
-        }
+    m_currentPowerPercent = (uint8_t)(((uint32_t)m_requestedPowerW * 100U) / m_heaterPowerW);
+    if (m_requestedPowerW > 0 && m_currentPowerPercent == 0) {
+        m_currentPowerPercent = 1;
     }
 
     return m_currentPowerPercent;

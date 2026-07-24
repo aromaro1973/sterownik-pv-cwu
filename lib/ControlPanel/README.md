@@ -1,12 +1,14 @@
-Moduł: ControlPanel (v1.0)Moduł ControlPanel odpowiada za kompletną obsługę interfejsu fizycznego (przycisków lokalnych urządzenia). Odczytuje stan pinów wejściowych mikrokontrolera ESP32, realizuje programowy debouncing (eliminację drgań styków) oraz implementuje zaawansowaną logikę rozróżniania krótkiego i długiego wciśnięcia dla klawisza funkcyjnego.💡 Mechanika działania i zaawansowane funkcjeWszystkie wejścia przycisków skonfigurowane są w trybie INPUT_PULLUP, co oznacza, że stanem aktywnym (wciśniętym) jest stan niski (LOW).Moduł oferuje następujące mechanizmy:Programowy Debouncing ($50\text{ ms}$): Zmiany stanów na pinach są akceptowane tylko wtedy, gdy od poprzedniej stabilizacji upłynęło co najmniej $50\text{ ms}$. Chroni to system przed fałszywymi, wielokrotnymi kliknięciami wywołanymi fizyczną charakterystyką styków mechanicznych.Rozróżnianie kliknięć przycisku MODE:Krótkie kliknięcie (< 2s): Generowane dopiero w momencie puszczenia przycisku (zbocze narastające), o ile czas trzymania był krótszy niż zdefiniowany limit.Długie przytrzymanie ($\ge 2\text{s}$): Generowane w locie, dokładnie po upływie $2000\text{ ms}$ trzymania przycisku. Użytkownik nie musi puszczać przycisku, aby system zareagował. Flaga m_modeLongPressed ustawia się jednorazowo (blokada wielokrotnego wyzwalania).Automatyczne czyszczenie zdarzeń (Auto-reset): Metody sprawdzające stan impulsów (np. wasModePressed()) zwracają stan flagi, po czym natychmiast ją zerują. Gwarantuje to, że jedno wciśnięcie przycisku zostanie obsłużone w głównym programie dokładnie jeden raz.🛠 Opis interfejsu programistycznego (API)Metody publiczneControlPanel()Opis: Konstruktor klasy. Zeruje flagi czasowe, stany przycisków (domyślnie HIGH z pull-up) oraz inicjalizuje domyślny tryb pracy (WorkMode::OFF) i moc ręczną na $0\%$.void begin()Opis: Inicjalizuje piny GPIO zdefiniowane w Config.h (PIN_BUTTON_PLUS, PIN_BUTTON_MODE, PIN_BUTTON_MINUS) jako wejścia z rezystorami podciągającymi do VCC (INPUT_PULLUP).void update()Opis: Metoda cykliczna. Wywołuje wewnętrzną procedurę readButtons(). Musi być regularnie uruchamiana w głównej pętli loop().Gettery i Settery stanu systemuWorkMode getMode() const / void setMode(WorkMode mode) – Zarządzanie aktualnym trybem pracy zapisanym w module.uint8_t getManualPower() const / void setManualPower(uint8_t power) – Zarządzanie nastawą mocy dla trybu ręcznego ($0-100\%$).Sprawdzanie impulsów (Zdarzeń)bool wasModePressed() – Zwraca true, jeśli wykryto krótkie kliknięcie MODE. Samoczynnie kasuje flagę.bool wasModeLongPressed() – Zwraca true, jeśli przycisk MODE przytrzymano przez minimum 2 sekundy. Samoczynnie kasuje flagę.bool wasPlusPressed() – Zwraca true, jeśli kliknięto przycisk PLUS. Samoczynnie kasuje flagę.bool wasMinusPressed() – Zwraca true, jeśli kliknięto przycisk MINUS. Samoczynnie kasuje flagę.📐 Algorytm maszyny stanów przycisku MODEPoniższy fragment kodu z metody readButtons() obrazuje precyzyjne zarządzanie czasem i zboczami dla przycisku funkcyjnego:C++// Detekcja wciśnięcia (zbocze opadające)
-if (modeState == LOW) {
-    m_modeActive = true;
-    m_modePressStartTime = now;
-}
-// Detekcja puszczenia (zbocze narastające) przed upływem limitu czasu
-else {
-    if (m_modeActive && (now - m_modePressStartTime < longPressDuration)) {
-        m_modeClicked = true; // Krótki klik
-    }
-    m_modeActive = false;
-}
+﻿# ControlPanel
+
+Modul obsluguje przyciski PLUS, MODE i MINUS.
+
+## Funkcje
+
+- debounce 50 ms,
+- rozroznienie klikniecia MODE i przytrzymania MODE (2 s),
+- zdarzenia impulsowe (`was...Pressed`) z auto-resetem,
+- przechowywanie aktualnego trybu (`WorkMode`) i nastawy mocy manualnej.
+
+## Integracja
+
+`main.cpp` odpowiada za mapowanie klikniec na akcje UI i logike trybow.

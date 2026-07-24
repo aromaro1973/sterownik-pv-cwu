@@ -20,7 +20,7 @@ public:
 
     // Funkcje sprawdzające zdarzenia (odczyt automatycznie zeruje flagę)
     bool wasModePressed();
-    bool wasModeLongPressed(); // <-- NOWOŚĆ: Detekcja przytrzymania 2s
+    bool wasModeLongPressed(); // Detekcja przytrzymania MODE (2s)
     bool wasPlusPressed();
     bool wasMinusPressed();
 
@@ -32,7 +32,7 @@ private:
 
     // Flagi zdarzeń (impulsów) dla loop()
     bool m_modeClicked;
-    bool m_modeLongPressed;    // <-- NOWOŚĆ
+    bool m_modeLongPressed;
     bool m_plusClicked;
     bool m_minusClicked;
 

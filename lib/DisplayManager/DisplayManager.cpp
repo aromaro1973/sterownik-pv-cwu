@@ -6,12 +6,15 @@ DisplayManager::DisplayManager()
       m_heaterState(false),
       m_burstCount(0),
       m_frequency(0.0f),
+    m_powerAverage(0.0f),
       m_currentScreen(DisplayScreen::SPLASH), // Startujemy od Splash Screenu
       m_currentSubScreen(0),
       m_currentServiceScreen(2),
       m_menuMaxPower(3500),
       m_menuPowerStep(1000),
       m_menuBatteryDraw(400),
+    m_menuPvHoldDelay(600),
+    m_menuHeaterPower(2000),
       m_refreshRequired(true),
       m_lastRefreshTime(0),
       m_splashScreenRendered(false),
@@ -36,8 +39,8 @@ void DisplayManager::update(const ESPNowManager& espNow)
 {
     uint32_t now = millis();
 
-    // Wymuszaj ciągłe odświeżanie dla dynamicznych ekranów diagnostycznych w menu serwisowym oraz ekranu debugowania
-    if (m_currentScreen == DisplayScreen::SERVICE || (m_currentScreen == DisplayScreen::MAIN && m_currentSubScreen == 4))
+    // Wymuszaj ciągłe odświeżanie dla dynamicznych ekranów diagnostycznych
+    if (m_currentScreen == DisplayScreen::INFO || m_currentScreen == DisplayScreen::CONFIG)
     {
         m_refreshRequired = true;
     }
@@ -65,6 +68,15 @@ void DisplayManager::setBurst(uint8_t burstCount) {
 }
 void DisplayManager::setFrequency(float frequency) {
     if (abs(m_frequency - frequency) > 0.05f) { m_frequency = frequency; m_refreshRequired = true; }
+}
+
+void DisplayManager::setPowerAverage(uint8_t powerPercent) {
+    if (m_powerAverage <= 0.1f) {
+        m_powerAverage = (float)powerPercent;
+    } else {
+        m_powerAverage = (powerPercent * 0.18f) + (m_powerAverage * 0.82f);
+    }
+    m_refreshRequired = true;
 }
 
 DisplayScreen DisplayManager::getScreen() const { return m_currentScreen; }
@@ -97,11 +109,17 @@ uint8_t DisplayManager::getServiceScreen() const { return m_currentServiceScreen
 uint16_t DisplayManager::getMenuMaxPower() const { return m_menuMaxPower; }
 void DisplayManager::setMenuMaxPower(uint16_t power) { if (m_menuMaxPower != power) { m_menuMaxPower = power; m_refreshRequired = true; } }
 
-uint16_t DisplayManager::getMenuPowerStep() const { return m_menuPowerStep; }
-void DisplayManager::setMenuPowerStep(uint16_t step) { if (m_menuPowerStep != step) { m_menuPowerStep = step; m_refreshRequired = true; } }
-
 uint16_t DisplayManager::getMenuBatteryDraw() const { return m_menuBatteryDraw; }
 void DisplayManager::setMenuBatteryDraw(uint16_t batteryDrawW) { if (m_menuBatteryDraw != batteryDrawW) { m_menuBatteryDraw = batteryDrawW; m_refreshRequired = true; } }
+
+uint16_t DisplayManager::getMenuPvHoldDelay() const { return m_menuPvHoldDelay; }
+void DisplayManager::setMenuPvHoldDelay(uint16_t holdDelayMs) { if (m_menuPvHoldDelay != holdDelayMs) { m_menuPvHoldDelay = holdDelayMs; m_refreshRequired = true; } }
+
+uint16_t DisplayManager::getMenuHeaterPower() const { return m_menuHeaterPower; }
+void DisplayManager::setMenuHeaterPower(uint16_t heaterPowerW) { if (m_menuHeaterPower != heaterPowerW) { m_menuHeaterPower = heaterPowerW; m_refreshRequired = true; } }
+
+uint16_t DisplayManager::getMenuPowerStep() const { return m_menuPowerStep; }
+void DisplayManager::setMenuPowerStep(uint16_t step) { if (m_menuPowerStep != step) { m_menuPowerStep = step; m_refreshRequired = true; } }
 
 void DisplayManager::forceRefresh() { m_refreshRequired = true; m_lastRefreshTime = 0; }
 
@@ -148,26 +166,32 @@ void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
             break;
 
         case DisplayScreen::MAIN:
+            drawMainScreen(espNow);
+            break;
+
+        case DisplayScreen::INFO:
             switch (m_currentSubScreen)
             {
-                case 0: drawMainScreen(espNow); break;      // Ekran 1.0
-                case 1: drawPvPowerScreen(espNow); break;    // Ekran 1.1
-                case 2: drawInverterScreen(espNow); break;   // Ekran 1.2
-                case 3: drawBatteryScreen(espNow); break;    // Ekran 1.3
-                case 4: drawDebugScreen(espNow); break;      // Ekran 1.4 (NOWY!)
+                case 1: drawEspNowRadioScreen(espNow); break;
+                case 2: drawZeroCrossScreen(); break;
+                case 3: drawPhaseManagerScreen(); break;
+                case 4: drawAutoControllerScreen(); break;
+                case 5: drawHeaterPowerScreen(); break;
+                case 6: drawInverterPowerScreen(espNow); break;
+                case 7: drawBatteryPowerScreen(espNow); break;
+                case 8: drawPvPowerScreen(espNow); break;
+                default: drawEspNowRadioScreen(espNow); break;
             }
             break;
 
-        case DisplayScreen::SERVICE:
+        case DisplayScreen::CONFIG:
             switch (m_currentServiceScreen)
             {
-                case 2: drawZeroCrossScreen(); break;          // Diagnostyka wejścia sieci AC
-                case 3: drawPhaseManagerScreen(); break;       // Diagnostyka triaka / fazy
-                case 4: drawGuardianMaxPowerScreen(); break;   // Limit falownika
-                case 5: drawBatteryDrawScreen(); break;        // Limit rozładowania baterii
-                case 6: drawGuardianDeltaPScreen(); break;     // Delta bezpieczeństwa
-                case 7: drawEspNowRadioScreen(espNow); break;  // Status ESP-NOW
-                case 8: drawAutoControllerScreen(); break;     // Stan logiki EMS
+                case 1: drawConfigMaxPowerScreen(); break;
+                case 2: drawConfigBatteryDrawScreen(); break;
+                case 3: drawConfigPvHoldDelayScreen(); break;
+                case 4: drawConfigHeaterPowerScreen(); break;
+                default: drawConfigMaxPowerScreen(); break;
             }
             break;
     }
@@ -180,142 +204,140 @@ void DisplayManager::refreshDisplay(const ESPNowManager& espNow)
 void DisplayManager::drawMainScreen(const ESPNowManager& espNow)
 {
     m_lcd.setCursor(0, 0);
+    m_lcd.print("TRYB: ");
     switch (m_mode)
     {
         case WorkMode::OFF:    m_lcd.print("OFF   "); break;
         case WorkMode::AUTO:   m_lcd.print("AUTO  "); break;
-        case WorkMode::MANUAL: m_lcd.print("MANU  "); break;
+        case WorkMode::MANUAL: m_lcd.print("MANUAL"); break;
     }
 
-    m_lcd.setCursor(6, 0);
-    m_lcd.printf("%3u%%", m_powerPercent);
-
-    m_lcd.setCursor(12, 0);
-    m_lcd.print(m_heaterState ? "  ON" : " OFF");
-
     m_lcd.setCursor(0, 1);
-    m_lcd.print("RADIO: ");
-    m_lcd.print(espNow.isConnected() ? "OK      " : "ERR     ");
-}
-
-void DisplayManager::drawPvPowerScreen(const ESPNowManager& espNow)
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.print("INFO: POMIARY PV");
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("MOC PV: %5uW", espNow.getPVPower());
-}
-
-// ZMODYFIKOWANY Ekran 1.2: DOM FAL oraz BILANS
-void DisplayManager::drawInverterScreen(const ESPNowManager& espNow)
-{
-    // Wyliczenie uproszczonego poboru domu na podstawie danych inwertera i baterii
-    int32_t domPower = (int32_t)espNow.getInverterPower() - espNow.getBatteryPower();
-    if (domPower < 0) domPower = 0;
-
-    int32_t bilans = (int32_t)espNow.getPVPower() - espNow.getInverterPower();
-
-    m_lcd.setCursor(0, 0);
-    m_lcd.printf("DOM FAL:   %5dW", domPower);
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("BILANS:   %+5dW", bilans);
-}
-
-void DisplayManager::drawBatteryScreen(const ESPNowManager& espNow)
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.print("INFO: AKUMULATOR");
-    m_lcd.setCursor(0, 1);
-    
-    int32_t batPower = espNow.getBatteryPower();
-    if (batPower <= 0)
+    if (m_mode == WorkMode::MANUAL && !m_heaterState)
     {
-        m_lcd.printf("BAT: LAD. %4dW", -batPower); // Wypisujemy wartość dodatnią przy ładowaniu
+        m_lcd.print("MOC:   ");
+        m_lcd.printf("%3u%%", m_powerPercent);
+        m_lcd.print(" SET");
     }
     else
     {
-        m_lcd.printf("BAT: ROZ. +%3dW", batPower);
+        m_lcd.print("GRZALKA:");
+        m_lcd.print(m_heaterState ? "ON " : "OFF");
+        m_lcd.printf("%3u%%", m_powerPercent);
     }
 }
 
 // =========================================================================
-// NOWOŚĆ: Ekran 1.4: LIVE DEBUG (Diagnostyka całego linku w czasie pracy)
-// =========================================================================
-void DisplayManager::drawDebugScreen(const ESPNowManager& espNow)
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.printf("ZC:%-3u      TR:%-3u", m_diagZc, m_diagTriggers);
-    
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("RAD:%-2s   LAT:%.2fs", 
-                 espNow.isConnected() ? "OK" : "NC", 
-                 m_smoothedLatency);
-}
-
-// =========================================================================
-// GRUPA 2: RENDERY MENU SERWISOWEGO
+// GRUPA INFO
 // =========================================================================
 
 void DisplayManager::drawZeroCrossScreen()
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("MOD: ZeroCross ");
-    m_lcd.print(m_frequency > 45.0f ? "OK" : "ERR");
+    m_lcd.print("ZEROCROSS");
 
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("ZC/s:%3u F:%4.1fH", m_diagZc, m_frequency);
+    m_lcd.printf("ZC:%3u F:%4.1fHz", m_diagZc, m_frequency);
 }
 
 void DisplayManager::drawPhaseManagerScreen()
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("MOD: PhaseCtr ");
-    m_lcd.print(m_diagTriggers > 0 ? "ACT" : "OFF");
+    m_lcd.print("PHASE CTRL");
     
     m_lcd.setCursor(0, 1);
-    m_lcd.printf("Trig/s: %3u/100", m_diagTriggers);
-}
-
-void DisplayManager::drawGuardianMaxPowerScreen()
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.print("GUARDIAN STAT:ON");
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("Inv Max:  %4uW", m_menuMaxPower);
-}
-
-void DisplayManager::drawGuardianDeltaPScreen()
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.print("GUARDIAN DYNC:ON");
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("Max dP:   %4uW", m_menuPowerStep);
-}
-
-void DisplayManager::drawBatteryDrawScreen()
-{
-    m_lcd.setCursor(0, 0);
-    m_lcd.print("BAT DRAW LIMIT");
-    m_lcd.setCursor(0, 1);
-    m_lcd.printf("MAX DRAW: %4uW", m_menuBatteryDraw);
+    m_lcd.printf("TR:%3u ZC:%3u", m_diagTriggers, m_diagZc);
 }
 
 void DisplayManager::drawEspNowRadioScreen(const ESPNowManager& espNow)
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("NADAJNIK: RAD: ");
-    m_lcd.print(espNow.isConnected() ? "OK " : "ERR");
-
+    m_lcd.print("ESP-NOW RADIO");
     m_lcd.setCursor(0, 1);
-    uint32_t avgPeriod = espNow.getLastPeriodMs();
-    if (avgPeriod > 9999) avgPeriod = 9999;
-    m_lcd.printf("Avg Period:%3ums", avgPeriod);
+    m_lcd.print(espNow.isConnected() ? "RADIO:OK " : "RADIO:OFF");
+    m_lcd.printf(" %4ums", espNow.getLastPeriodMs());
 }
 
 void DisplayManager::drawAutoControllerScreen()
 {
     m_lcd.setCursor(0, 0);
-    m_lcd.print("AUTOCONTROL: ON ");
+    m_lcd.print("AUTOCONTROL");
     m_lcd.setCursor(0, 1);
-    m_lcd.print("EMS Loop: Active");
+    m_lcd.printf("AVG PWR:%4.0f%%", m_powerAverage);
+}
+
+void DisplayManager::drawHeaterPowerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC GRZANIA GRZAL");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("AVG:%4.0f%%", m_powerAverage);
+}
+
+void DisplayManager::drawInverterPowerScreen(const ESPNowManager& espNow)
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC FALOWNIKA");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%5uW", espNow.getInverterPower());
+}
+
+void DisplayManager::drawBatteryPowerScreen(const ESPNowManager& espNow)
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC BATERII");
+    m_lcd.setCursor(0, 1);
+    int32_t batPower = espNow.getBatteryPower();
+    if (batPower <= 0)
+    {
+        m_lcd.printf("LAD:%5dW", -batPower);
+    }
+    else
+    {
+        m_lcd.printf("ROZ:%5dW", batPower);
+    }
+}
+
+void DisplayManager::drawPvPowerScreen(const ESPNowManager& espNow)
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC PRODUKCJI PV");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%5uW", espNow.getPVPower());
+}
+
+// =========================================================================
+// GRUPA KONFIG
+// =========================================================================
+
+void DisplayManager::drawConfigMaxPowerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC MAX FALOWNIK");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%4uW MODE=OK", m_menuMaxPower);
+}
+
+void DisplayManager::drawConfigBatteryDrawScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MAX ROZLAD. BATER.");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%4uW MODE=OK", m_menuBatteryDraw);
+}
+
+void DisplayManager::drawConfigPvHoldDelayScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("CZAS ZWLOKA PV");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%4ums MODE=OK", m_menuPvHoldDelay);
+}
+
+void DisplayManager::drawConfigHeaterPowerScreen()
+{
+    m_lcd.setCursor(0, 0);
+    m_lcd.print("MOC GRZALKI");
+    m_lcd.setCursor(0, 1);
+    m_lcd.printf("%4uW MODE=SAVE", m_menuHeaterPower);
 }

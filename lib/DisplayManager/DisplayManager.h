@@ -10,7 +10,8 @@
 enum class DisplayScreen {
     SPLASH,          
     MAIN,            
-    SERVICE          
+    INFO,
+    CONFIG          
 };
 
 class DisplayManager
@@ -23,6 +24,7 @@ public:
 
     void setMode(WorkMode mode);
     void setPower(uint8_t powerPercent);
+    void setPowerAverage(uint8_t powerPercent);
     void setHeaterState(bool state);
     void setBurst(uint8_t burstCount);
     void setFrequency(float frequency);
@@ -39,11 +41,17 @@ public:
     uint16_t getMenuMaxPower() const;
     void setMenuMaxPower(uint16_t power);
 
-    uint16_t getMenuPowerStep() const;
-    void setMenuPowerStep(uint16_t step);
-
     uint16_t getMenuBatteryDraw() const;
     void setMenuBatteryDraw(uint16_t batteryDrawW);
+
+    uint16_t getMenuPvHoldDelay() const;
+    void setMenuPvHoldDelay(uint16_t holdDelayMs);
+
+    uint16_t getMenuHeaterPower() const;
+    void setMenuHeaterPower(uint16_t heaterPowerW);
+
+    uint16_t getMenuPowerStep() const;
+    void setMenuPowerStep(uint16_t step);
 
     void forceRefresh();
     void showSplashScreen(); 
@@ -57,18 +65,18 @@ private:
     void refreshDisplay(const ESPNowManager& espNow);
 
     void drawMainScreen(const ESPNowManager& espNow); 
-    void drawPvPowerScreen(const ESPNowManager& espNow); 
-    void drawInverterScreen(const ESPNowManager& espNow); 
-    void drawBatteryScreen(const ESPNowManager& espNow); 
-    void drawDebugScreen(const ESPNowManager& espNow); // <-- NOWOŚĆ: Ekran 1.4 Live Debug
-
     void drawZeroCrossScreen(); 
     void drawPhaseManagerScreen(); 
-    void drawGuardianMaxPowerScreen(); 
-    void drawGuardianDeltaPScreen(); 
-    void drawBatteryDrawScreen();
     void drawEspNowRadioScreen(const ESPNowManager& espNow); 
     void drawAutoControllerScreen(); 
+    void drawHeaterPowerScreen();
+    void drawInverterPowerScreen(const ESPNowManager& espNow);
+    void drawBatteryPowerScreen(const ESPNowManager& espNow);
+    void drawPvPowerScreen(const ESPNowManager& espNow);
+    void drawConfigMaxPowerScreen();
+    void drawConfigBatteryDrawScreen();
+    void drawConfigPvHoldDelayScreen();
+    void drawConfigHeaterPowerScreen();
 
     LiquidCrystal_I2C m_lcd{0x27, 16, 2}; 
 
@@ -77,6 +85,7 @@ private:
     bool          m_heaterState;
     uint8_t       m_burstCount;
     float         m_frequency;
+    float         m_powerAverage;
     
     DisplayScreen m_currentScreen;
     uint8_t       m_currentSubScreen;     
@@ -85,6 +94,8 @@ private:
     uint16_t      m_menuMaxPower;
     uint16_t      m_menuPowerStep;
     uint16_t      m_menuBatteryDraw;
+    uint16_t      m_menuPvHoldDelay;
+    uint16_t      m_menuHeaterPower;
 
     bool          m_refreshRequired;
     uint32_t      m_lastRefreshTime;

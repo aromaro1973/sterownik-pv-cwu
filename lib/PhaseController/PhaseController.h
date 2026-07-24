@@ -10,6 +10,9 @@ public:
     
     // Ustawia moc od 0 do 100 (wywoływane w loop)
     static void setPower(int percent);
+
+    // Zwraca rzeczywiście wykonany poziom mocy (0..47% fazowo lub 100% pełna fala z histerezą).
+    static uint8_t getAppliedPower();
     
     // Zwraca aktualne opóźnienie w mikrosekundach
     static uint32_t getDelayMicros();
@@ -20,6 +23,8 @@ public:
 private:
     static uint8_t _triacPin;
     static volatile uint32_t _delayMicros; 
+    static volatile uint8_t _appliedPowerPercent;
+    static bool _fullPowerLatched;
     static esp_timer_handle_t _timerHandle;
 
     // Metoda wywoływana przez timer po odliczeniu czasu opóźnienia

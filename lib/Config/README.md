@@ -1,5 +1,15 @@
-Moduł: Config (v1.0)Plik Config.h jest centralnym punktem konfiguracyjnym całego projektu. Definiuje on wszystkie stałe kompilacji, przypisania pinów mikrokontrolera ESP32, limity bezpieczeństwa, parametry fizyczne sieci AC oraz globalne tryby pracy sterownika.Dzięki skupieniu tych parametrów w jednym miejscu, modyfikacja zachowania urządzenia nie wymaga ingerencji w logikę poszczególnych bibliotek.⚙️ Struktura konfiguracjiKonfiguracja została czytelnie podzielona na sekcje tematyczne:1. Metadane urządzenia i oprogramowaniaFW_VERSION – Wersja oprogramowania (zaczynając od 1.0.0 dla ujednolicenia z dokumentacją).HW_VERSION – Wersja fizycznej płytki PCB (1.0).DEVICE_NAME – Nazwa rozgłoszeniowa urządzenia.2. Przypisanie pinów (Pinout ESP32)PIN_ZERO_CROSS (27) – Wejście detektora przejścia napięcia sieci przez zero (np. układ optoizolowany H11AA1).PIN_TRIAC (14) – Wyjście sterujące bramką triaka (poprzez optotriak bez detekcji zera, np. MOC3023).PIN_LED (2) – Wbudowana dioda LED do sygnalizacji statusu pracy urządzenia.3. Panel sterowania (Interfejs fizyczny)Piny dedykowane do obsługi przycisków lokalnego panelu użytkownika:PIN_BUTTON_PLUS (32) – Zwiększanie wartości / nawigacja.PIN_BUTTON_MODE (33) – Zmiana trybu pracy sterownika.PIN_BUTTON_MINUS (25) – Zmniejszanie wartości / nawigacja.4. Parametry sieci AC (Dla fazy $50\text{ Hz}$)Stałe określające fizykę sieci energetycznej w Polsce, kluczowe dla poprawnego wyliczania opóźnień fazowych triaka:AC_FREQUENCY = 50 – Częstotliwość sieci $[Hz]$.HALF_CYCLES_PER_SECOND = 100 – Liczba półokresów sieci na sekundę.HALF_CYCLE_DURATION_US = 10000 – Czas trwania jednego półokresu ($10\text{ ms}$ czyli $10000\ \mu s$).5. Limity bezpieczeństwa (Dla modułu Guardian)MAX_INVERTER_POWER_W (3500) – Maksymalna dopuszczalna moc obciążenia falownika $[W]$. Przekroczenie tej wartości powinno wyzwolić reakcję obronną.MAX_BATTERY_DRAW_W (400) – Maksymalna dopuszczalna moc pobierana z akumulatora (np. 24V) na cele podgrzewania wody $[W]$.6. Zakres regulacji mocy grzałkiMIN_POWER (0) – Wyłączenie ($0\%$).MAX_POWER (100) – Pełne wysterowanie ($100\%$).PHASE_CONTROL_MAX_LIMIT (40) – Górny próg bezpiecznego cięcia sinusoidy ($40\%$). Powyżej tej wartości sterownik wchodzi w „strefę martwą”, by chronić falownik przed harmonicznymi.7. Komunikacja, debugowanie i WiFiDEBUG_MODE – Flaga aktywująca szczegółowe logowanie na port szeregowy.SERIAL_BAUDRATE (115200) – Prędkość transmisji UART.LOG_INTERVAL (1000) – Częstotliwość raportowania stanu układu $[ms]$.WIFI_SSID & WIFI_PASSWORD – Dane logowania do sieci lokalnej dla potrzeb monitoringu i komunikacji ESP-NOW.🚦 Tryby pracy sterownika (WorkMode)Plik definiuje kluczowy typ wyliczeniowy (klasę enum) WorkMode, która określa aktualny stan logiczny urządzenia:C++enum class WorkMode {
-    OFF,    // Grzałka całkowicie odcięta (stan bezpieczny)
-    AUTO,   // Automatyczne śledzenie nadwyżek (praca algorytmu AutoController + Guardian)
-    MANUAL  // Ręczne, sztywne ustawienie mocy grzania przez użytkownika
-};
+﻿# Config
+
+Plik `Config.h` zawiera stale kompilacyjne projektu.
+
+## Zakres
+
+- wersje firmware/hardware,
+- mapowanie pinow ESP32,
+- stale czasowe i sieciowe,
+- tryby pracy (`WorkMode`),
+- ustawienia logowania.
+
+## Uwaga
+
+Wartosci runtime (limity i parametry menu) sa utrzymywane przez `Guardian` w NVS i moga nadpisywac stale domyslne po starcie.

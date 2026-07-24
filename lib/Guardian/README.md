@@ -1,6 +1,16 @@
-Przeanalizowałem pliki kodu źródłowego modułu nadzoru i bezpieczeństwa: Guardian.h oraz Guardian.cpp.Guardian (Nadzorca) to dedykowana warstwa ochronna (interlock) systemu, działająca niezależnie od głównego algorytmu regulacji. Jej nadrzędnym celem jest monitorowanie integralności sprzętowej, weryfikowanie krytycznych parametrów sieciowych oraz blokowanie wysterowania grzałki w sytuacjach awaryjnych lub po przekroczeniu zdefiniowanych limitów bezpieczeństwa.Oto kompletny plik README.md dla modułu Guardian (wersja v1.0):Moduł: Guardian (v1.0)Moduł Guardian pełni rolę sprzętowo-programowego bezpiecznika nadrzędnego w systemie EMS. Nadzoruje on bezpieczne limity pracy urządzenia, chroniąc instalację elektryczną oraz falownik przed przeciążeniem, a także dba o to, by przyrosty mocy grzałki nie generowały gwałtownych udarów prądowych.💡 Rola i mechanizm zabezpieczeńModuł działa jako zewnętrzny arbiter dla algorytmu AutoController. Jeżeli Guardian wykryje naruszenie zdefiniowanych granic bezpieczeństwa:Aktywuje stan blokady (blocked = true).Określa dokładną przyczynę zatrzymania pracy poprzez strukturę GuardianBlockReason.Informuje główną pętlę oraz system automatyki, co skutkuje natychmiastowym zrzutem wysterowania do bezpiecznego poziomu $0\%$ (poprzez flagę guardianBlocked w AutoController).🚦 Powody blokad (Maszyna stanów awaryjnych)Klasa definiuje typ wyliczeniowy GuardianBlockReason, reprezentujący aktualną przyczynę zatrzymania pracy systemu:NONE: Brak blokad. System pracuje w trybie normalnym.MAX_POWER: Wyzwalane w przypadku, gdy sumaryczna moc urządzeń i wysterowanej grzałki przekroczy zdefiniowany limit obciążenia falownika (MAX_INVERTER_POWER_W).POWER_STEP: Blokada udarowa. Aktywuje się, gdy zmiana zapotrzebowania na moc (delta) w jednostce czasu przekracza bezpieczny próg dynamiczny, chroniąc stopień wyjściowy falownika przed przeciążeniem przejściowym.🛠️ Opis interfejsu programistycznego (API)Metody publicznevoid begin(uint16_t nominalHeaterPower)Opis: Inicjalizuje moduł ochronny na starcie urządzenia.Parametry:nominalHeaterPower – Fizyczna moc znamionowa podpiętej grzałki $[W]$ (np. pobierana z pliku Config.h).void update()Opis: Cykliczna metoda aktualizacji powołana do życia w pętli loop(). Stanowi dedykowane miejsce na implementację dynamicznych testów bezpieczeństwa w czasie rzeczywistym.Gettery i Settery parametrów granicznychvoid setMaxPower(uint16_t power) / uint16_t getMaxPower() const – Zarządzanie maksymalnym limitem mocy dopuszczalnej w instalacji $[W]$.void setPowerStep(uint16_t step) / uint16_t getPowerStep() const – Konfiguracja dopuszczalnego, jednostkowego kroku dynamicznego przyrostu obciążenia $[W]$.Monitorowanie stanu blokadybool isBlocked() const – Zwraca stan flagi blokady bezpieczeństwa. Wartość true wymusza twarde wyłączenie grzałki.GuardianBlockReason getBlockReason() const – Zwraca aktualny, wewnętrzny kod błędu / przyczyny blokady.const char* blockReasonToString() const – Zamienia kod błędu na czytelny dla użytkownika łańcuch tekstowy (np. do wyświetlenia na ekranie LCD za pomocą DisplayManager lub wysłania do diagnostyki przez Logger).📌 Planowany rozwój modułuAktualny szkielet kodu przygotowany jest pod rozbudowę o następującą logikę w metodzie update():C++// Przykład planowanej integracji i wyliczania mocy rzeczywistej grzałki:
-float currentPowerW = (actualPowerPercent * heaterMaxPower) / 100.0f;
-if (currentPowerW > maxPower) { 
-    blocked = true; 
-    blockReason = GuardianBlockReason::MAX_POWER; 
-}
+﻿# Guardian
+
+Modul odpowiada glownie za utrzymanie i persystencje parametrow konfiguracji w NVS.
+
+## Parametry utrzymywane w NVS
+
+- `maxPower`
+- `powerStep`
+- `maxBatteryDraw`
+- `heaterPower`
+- `pvHoldDelay`
+
+## Rola runtime
+
+- udostepnia wartosci dla `main.cpp` i `AutoController`,
+- zawiera metody `update/isBlocked`, ale w aktualnej architekturze glowne zabezpieczenie komunikacyjne realizuje `main.cpp`.

@@ -34,6 +34,12 @@ public:
     void setMaxBatteryDraw(uint16_t maxBatteryDrawW);
     uint16_t getMaxBatteryDraw() const;
 
+    void setNominalHeaterPower(uint16_t nominalHeaterPower);
+    uint16_t getNominalHeaterPower() const;
+
+    void setPvHoldDelay(uint16_t holdDelayMs);
+    uint16_t getPvHoldDelay() const;
+
     // Funkcje obsługi pamięci nieulotnej flash (NVS)
     void saveSettings();
     void loadSettings();
@@ -45,6 +51,7 @@ private:
     uint16_t m_powerStep;
     uint16_t m_maxBatteryDrawW;
     uint16_t m_nominalHeaterPowerW;
+    uint16_t m_pvHoldDelayMs;
 };
 
 #endif // GUARDIAN_H

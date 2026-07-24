@@ -1,3 +1,15 @@
-Moduł: PhaseController (v1.0)Moduł PhaseController jest bezpośrednim sterownikiem elementu wykonawczego (triaka). Odpowiada za przeliczanie żądanej mocy procentowej na precyzyjne opóźnienie czasowe wyrażone w mikrosekundach ($\mu s$), które określa moment podania impulsu wyzwalającego bramkę triaka po każdym wykrytym przejściu napięcia sieci przez zero.⚙️ Zasada sterowania fazowego i limity sprzętoweAby uchronić falownik off-grid przed negatywnymi skutkami generowania wyższych harmonicznych (zakłóceń) przy głębokim cięciu sinusoidy, moduł ten sprzętowo i programowo narzuca bezpieczne progi wysterowania:Stan wyłączenia ($0\%$): Opóźnienie zostaje ustawione na pełny czas trwania półokresu ($10000\ \mu s$), co oznacza, że triak nigdy nie zostanie wyzwolony.Praca fazowa ($1\% - 40\%$): Bezpieczny przedział liniowej pracy regulacyjnej.Dla $1\%$ wysterowania opóźnienie wynosi około $9500\ \mu s$ (triak przewodzi tylko przez ułamek półokresu).Dla $40\%$ wysterowania opóźnienie wynosi około $6500\ \mu s$.Strefa martwa ($41\% - 94\%$): Każda wartość z tego przedziału jest programowo degradowana (sztywno przycinana) do bezpiecznego poziomu $40\%$, aby zapobiec pracy w pasmie generującym największe zakłócenia dla falowników.Pełne otwarcie ($\ge 95\%$): Przejście na czystą sinusoidę ($100\%$ mocy). Opóźnienie wynosi natychmiast $0\ \mu s$, a bramka triaka jest wyzwalana bezzwłocznie przy każdym przejściu przez zero.🧠 Analiza mapowania i wielordzeniowości (Multi-Core Security)Ponieważ wyzwalanie triaka opiera się na przerwaniach sprzętowych (prawdopodobnie rejestrowanych na osobnym rdzeniu ESP32 – Core 0), w architekturze modułu zastosowano kluczowe zabezpieczenia:Atrybut volatile:Zmienna _delayMicros przechowująca czas opóźnienia została oznaczona jako volatile:C++static volatile uint32_t _delayMicros;
-Informuje to kompilator, że wartość ta może ulec zmianie w dowolnym momencie poza głównym wątkiem programu i zabrania jej buforowania w rejestrach procesora. Gwarantuje to spójność danych pomiędzy pętlą główną (Core 1), a przerwaniami (Core 0).Niskopoziomowe mapowanie sygnału:Konwersja z procentów na mikrosekundy realizowana jest przez wbudowaną funkcję map():C++_delayMicros = map(percent, 0, 40, 10000, 6500);
-Zapewnia to płynną, liniową charakterystykę przejścia czasowego w bezpiecznym zakresie pracy.🛠️ Opis interfejsu programistycznego (API)Metody publiczne (Statyczne)Z uwagi na to, że metody klasy są statyczne, moduł nie wymaga tworzenia instancji obiektu i może być wywoływany bezpośrednio (PhaseController::method()).static void begin(uint8_t zeroCrossPin, uint8_t triacPin)Opis: Konfiguruje kierunki pracy pinów GPIO mikrokontrolera ESP32.Parametry:zeroCrossPin – Pin wejściowy detektora przejścia przez zero (wejście z podciągnięciem INPUT_PULLUP).triacPin – Pin wyjściowy sterujący optotriakiem (OUTPUT).static void setPower(int percent)Opis: Główna metoda przeliczająca żądaną moc na czas opóźnienia bramki. Zawiera kompletną logikę filtracji pasma i bezpieczeństwa falownika.Parametry:percent – Żądana moc grzałki w przedziale $[0, 100]\%$.static uint32_t getDelayMicros()Opis: Zwraca aktualnie wyliczony czas opóźnienia zapasowy dla przerwania.Zwraca: Wartość czasu w mikrosekundach $[\mu s]$ w zakresie $[0, 10000]$.
+﻿# PhaseController
+
+Modul wykonawczy triaka, zsynchronizowany z przejsciem przez zero.
+
+## Zasada pracy
+
+- przyjmuje komende mocy `0..100`,
+- mapuje zakres `0..47%` na opoznienie zaplonu,
+- zakres `48..99%` ogranicza do `47%`,
+- `100%` uruchamia pelna fale,
+- utrzymuje histereze `fullPowerLatched` i schodzi z 100% dopiero po spadku komendy ponizej 80%.
+
+## Diagnostyka
+
+- udostepnia `getAppliedPower()` oraz `getDelayMicros()`.
